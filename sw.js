@@ -1,5 +1,5 @@
 // CorePokerGroup Service Worker
-const CACHE_NAME = 'corepoker-v3';
+const CACHE_NAME = 'corepoker-v6';
 const ASSETS = [
   './index.html',
   './manifest.json',
@@ -33,25 +33,42 @@ self.addEventListener('activate', function(event) {
   self.clients.claim();
 });
 
-// Fetch: serve from cache first, fall back to network (offline-friendly)
+// Fetch: network-first for the app/HTML (so the newest version loads when online),
+// cache-first for static assets (icons/manifest). Falls back to cache when offline.
 self.addEventListener('fetch', function(event) {
   if (event.request.method !== 'GET') return;
-  event.respondWith(
-    caches.match(event.request).then(function(cached) {
-      if (cached) return cached;
-      return fetch(event.request).then(function(response) {
-        // Cache same-origin successful responses for next time
-        if (response && response.status === 200 && event.request.url.startsWith(self.location.origin)) {
+
+  const req = event.request;
+  const isHTML = req.mode === 'navigate' ||
+                 (req.headers.get('accept') || '').indexOf('text/html') !== -1;
+
+  if (isHTML) {
+    // Network-first: always try to get the freshest app, fall back to cache offline
+    event.respondWith(
+      fetch(req).then(function(response) {
+        if (response && response.status === 200) {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then(function(cache) {
-            cache.put(event.request, copy);
-          });
+          caches.open(CACHE_NAME).then(function(cache) { cache.put(req, copy); });
         }
         return response;
       }).catch(function() {
-        // Offline and not cached — fail gracefully
-        return cached;
-      });
+        return caches.match(req).then(function(c) { return c || caches.match('./index.html'); });
+      })
+    );
+    return;
+  }
+
+  // Cache-first for everything else (icons, manifest)
+  event.respondWith(
+    caches.match(req).then(function(cached) {
+      if (cached) return cached;
+      return fetch(req).then(function(response) {
+        if (response && response.status === 200 && req.url.startsWith(self.location.origin)) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(function(cache) { cache.put(req, copy); });
+        }
+        return response;
+      }).catch(function() { return cached; });
     })
   );
 });
