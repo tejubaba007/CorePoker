@@ -1635,3 +1635,658 @@
                         allFilled = false;
                     } else {
                         totalChips += val;
+                        // NOTE: Do NOT write to currentGame.players here — that's calculateCashout's job
+                    }
+                });
+
+                const btn = document.getElementById('cashout-calc-btn');
+                const hint = document.getElementById('cashout-hint');
+                const imbalanceBox = document.getElementById('chip-imbalance-box');
+
+                if (allFilled) {
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+
+                    const difference = expectedTotal - totalChips;
+                    const balancedAmount = totalChips * this.currentGame.chipValue;
+                    const missingAmount = difference * this.currentGame.chipValue;
+
+                    if (difference !== 0) {
+                        imbalanceBox.style.display = 'block';
+                        imbalanceBox.innerHTML = '<div class="warning-box">' +
+                            '<div class="title">⚠️ Chip Count Imbalance</div>' +
+                            '<div>Expected: <strong>' + this.formatNumber(expectedTotal) + '</strong> chips | ' +
+                            'Entered: <strong>' + this.formatNumber(totalChips) + '</strong> chips</div>' +
+                            '<div style="margin-top: 8px;">' +
+                            '<span style="color: #EF4444;">Missing: ' + this.formatNumber(difference) + ' chips (' + this.formatCurrency(missingAmount) + ')</span><br>' +
+                            '<span style="color: #10B981;">Balanced/Accounted: ' + this.formatNumber(totalChips) + ' chips (' + this.formatCurrency(balancedAmount) + ')</span>' +
+                            '</div>' +
+                            '<div style="margin-top: 8px; font-size: 12px; color: #FCA5A5;">' +
+                            'The missing chips will be distributed equally among all players as a loss.' +
+                            '</div></div>';
+                    } else {
+                        imbalanceBox.style.display = 'block';
+                        imbalanceBox.innerHTML = '<div class="info-box">' +
+                            '<div class="title">✓ Chips Balanced</div>' +
+                            'All ' + this.formatNumber(totalChips) + ' chips accounted for (' + this.formatCurrency(balancedAmount) + ')' +
+                            '</div>';
+                    }
+
+                    hint.textContent = difference !== 0 
+                        ? 'Imbalance detected. ' + this.formatCurrency(Math.abs(missingAmount)) + ' will be distributed as loss.' 
+                        : 'All chips accounted for. Ready to calculate!';
+                } else {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    imbalanceBox.style.display = 'none';
+                    hint.textContent = 'Enter chip counts for all players to continue';
+                }
+            },
+
+            calculateCashout() {
+                if (!this.currentGame) return;
+
+                const expectedTotalChips = this.currentGame.players.reduce((sum, p) => sum + p.totalChips, 0);
+                let actualTotalChips = 0;
+
+                // Read from DOM inputs (single source of truth)
+                this.currentGame.players.forEach((p, idx) => {
+                    const val = parseInt(document.getElementById('cashout-' + idx).value) || 0;
+                    p.cashoutChips = val;
+                    actualTotalChips += val;
+                });
+
+                const missingChips = expectedTotalChips - actualTotalChips;
+                const chipValue = this.currentGame.chipValue;
+                const missingAmount = missingChips * chipValue;
+                const balancedAmount = actualTotalChips * chipValue;
+
+                this.currentGame.chipImbalance = {
+                    expectedChips: expectedTotalChips,
+                    actualChips: actualTotalChips,
+                    missingChips: missingChips,
+                    missingAmount: missingAmount,
+                    balancedAmount: balancedAmount
+                };
+
+                // Compute POKER-ONLY results.
+                // rawProfit = cashoutValue - invested already reflects any chip imbalance
+                // correctly: missing chips mean a lower cashout, so the loss naturally falls on
+                // whoever was short. Do NOT additionally redistribute the imbalance, or the loss
+                // would be double-counted. (Sum of profits = total cashed out - total invested,
+                // which equals the value of any missing chips — a genuine collective loss.)
+                this.currentGame.pokerResults = this.currentGame.players.map(p => {
+                    const cashoutValue = p.cashoutChips * chipValue;
+                    const rawProfit = cashoutValue - p.totalInvested;
+                    const pokerProfit = Math.round(rawProfit * 100) / 100;
+                    return {
+                        playerId: p.id,
+                        name: p.name,
+                        invested: p.totalInvested,
+                        cashoutChips: p.cashoutChips,
+                        cashoutValue: Math.round(cashoutValue * 100) / 100,
+                        rawProfit: Math.round(rawProfit * 100) / 100,
+                        missingShare: 0,
+                        pokerProfit: pokerProfit
+                    };
+                });
+
+                this.goToScreen('chipBalance');
+                this.renderChipBalance();
+            },
+
+            renderChipBalance() {
+                const game = this.currentGame;
+                const imb = game.chipImbalance;
+                const box = document.getElementById('cb-balance-box');
+
+                if (imb.missingChips === 0) {
+                    box.innerHTML = '<div class="info-box">' +
+                        '<div class="title">✓ Chips Balanced</div>' +
+                        'All ' + this.formatNumber(imb.actualChips) + ' chips accounted for (' + this.formatCurrency(imb.balancedAmount) + ')' +
+                        '</div>';
+                } else {
+                    const verb = imb.missingChips > 0 ? 'Missing' : 'Surplus';
+                    const diffChips = Math.abs(imb.missingChips);
+                    const diffAmt = Math.abs(imb.missingAmount);
+                    box.innerHTML = '<div class="warning-box">' +
+                        '<div class="title">⚠️ Chip Count ' + (imb.missingChips > 0 ? 'Short' : 'Over') + '</div>' +
+                        '<div>Expected: <strong>' + this.formatNumber(imb.expectedChips) + '</strong> chips | ' +
+                        'Counted: <strong>' + this.formatNumber(imb.actualChips) + '</strong> chips</div>' +
+                        '<div style="margin-top:8px;color:' + (imb.missingChips > 0 ? '#EF4444' : '#F59E0B') + ';">' +
+                        verb + ': ' + this.formatNumber(diffChips) + ' chips (' + this.formatCurrency(diffAmt) + ')</div>' +
+                        (imb.missingChips > 0 ? '<div style="margin-top:8px;font-size:12px;color:#FCA5A5;">This shortfall is split equally across all players. If this looks wrong, go back and recount.</div>' : '<div style="margin-top:8px;font-size:12px;color:#FCD34D;">More chips counted than bought in. Go back and recheck the counts.</div>') +
+                        '</div>';
+                }
+
+                const container = document.getElementById('cb-results');
+                container.innerHTML = game.pokerResults.map(r => {
+                    return '<div class="result-row ' + (r.pokerProfit >= 0 ? 'profit' : 'loss') + '">' +
+                        '<div>' +
+                        '<div class="result-name">' + this.esc(r.name) + '</div>' +
+                        '<div style="font-size:12px;color:#6B7280;margin-top:2px;">' +
+                        'In: ' + this.formatCurrency(r.invested) + ' • Out: ' + this.formatNumber(r.cashoutChips) + ' chips = ' + this.formatCurrency(r.cashoutValue) +
+                        (r.missingShare > 0 ? '<br><span style="color:#EF4444;">Shortfall share: -' + this.formatCurrency(r.missingShare) + '</span>' : '') +
+                        '</div></div>' +
+                        '<div class="result-amount ' + (r.pokerProfit >= 0 ? 'green' : 'red') + '">' +
+                        (r.pokerProfit >= 0 ? '+' : '') + this.formatCurrency(r.pokerProfit) +
+                        '</div></div>';
+                }).join('');
+            },
+
+            // Layer expenses on top of confirmed poker results, then settle
+            proceedToSettlement() {
+                const game = this.currentGame;
+
+                // Build expense adjustments per player
+                const expenseNetByPlayer = {};
+                game.players.forEach(p => { expenseNetByPlayer[p.name] = 0; });
+
+                game.expenses.forEach(expense => {
+                    const consumers = expense.consumers && expense.consumers.length > 0
+                        ? expense.consumers
+                        : game.players.map(p => p.name);
+                    // Round each share to cents; give any leftover pennies to the payer so the
+                    // expense reconciles to the exact amount (no floating-point drift).
+                    const totalCents = Math.round(expense.amount * 100);
+                    const baseShareCents = Math.floor(totalCents / consumers.length);
+                    let remainderCents = totalCents - baseShareCents * consumers.length;
+                    consumers.forEach(name => {
+                        let shareCents = baseShareCents;
+                        if (remainderCents > 0) { shareCents += 1; remainderCents -= 1; }
+                        if (expenseNetByPlayer.hasOwnProperty(name)) {
+                            expenseNetByPlayer[name] -= shareCents / 100;
+                        }
+                    });
+                    const payer = expense.paidBy;
+                    if (payer && payer !== 'Host' && expenseNetByPlayer.hasOwnProperty(payer)) {
+                        expenseNetByPlayer[payer] += totalCents / 100;
+                    }
+                });
+
+                // Combine confirmed poker result + expenses
+                game.results = game.pokerResults.map(pr => {
+                    const expenseAdjustment = Math.round((expenseNetByPlayer[pr.name] || 0) * 100) / 100;
+                    const adjustedProfit = Math.round((pr.pokerProfit + expenseAdjustment) * 100) / 100;
+                    return {
+                        playerId: pr.playerId,
+                        name: pr.name,
+                        invested: pr.invested,
+                        cashoutChips: pr.cashoutChips,
+                        cashoutValue: pr.cashoutValue,
+                        rawProfit: pr.rawProfit,
+                        missingShare: pr.missingShare,
+                        pokerProfit: pr.pokerProfit,
+                        expenseAdjustment: expenseAdjustment,
+                        adjustedProfit: adjustedProfit
+                    };
+                });
+
+                this.goToScreen('settlement');
+                this.renderSettlement();
+            },
+
+            renderSettlement() {
+                const results = this.currentGame.results;
+                const container = document.getElementById('settlement-results');
+                const instructions = document.getElementById('settlement-instructions');
+
+                container.innerHTML = results.map(r => {
+                    const pokerLine = '<br><span style="color:#9CA3AF;">Poker: ' + (r.pokerProfit >= 0 ? '+' : '') + this.formatCurrency(r.pokerProfit) + '</span>';
+                    const expLine = r.expenseAdjustment !== 0
+                        ? '<span style="color: #F59E0B;"> • Expenses: ' + (r.expenseAdjustment >= 0 ? '+' : '') + this.formatCurrency(r.expenseAdjustment) + '</span>'
+                        : '';
+                    return '<div class="result-row ' + (r.adjustedProfit >= 0 ? 'profit' : 'loss') + '">' +
+                        '<div>' +
+                        '<div class="result-name">' + this.esc(r.name) + '</div>' +
+                        '<div style="font-size: 12px; color: #6B7280; margin-top: 2px;">' +
+                        'Out: ' + this.formatNumber(r.cashoutChips) + ' chips = ' + this.formatCurrency(r.cashoutValue) +
+                        pokerLine + expLine +
+                        '</div></div>' +
+                        '<div class="result-amount ' + (r.adjustedProfit >= 0 ? 'green' : 'red') + '">' +
+                        (r.adjustedProfit >= 0 ? '+' : '') + this.formatCurrency(r.adjustedProfit) +
+                        '</div></div>';
+                }).join('');
+
+                // Greedy settlement with stricter rounding threshold
+                const THRESHOLD = 0.005;
+                const debtors = results.filter(r => r.adjustedProfit < -THRESHOLD).map(r => ({ name: r.name, amount: Math.round(-r.adjustedProfit * 100) / 100 }));
+                const creditors = results.filter(r => r.adjustedProfit > THRESHOLD).map(r => ({ name: r.name, amount: Math.round(r.adjustedProfit * 100) / 100 }));
+
+                const transactions = [];
+
+                while (debtors.length > 0 && creditors.length > 0) {
+                    const debtor = debtors[0];
+                    const creditor = creditors[0];
+                    const amount = Math.round(Math.min(debtor.amount, creditor.amount) * 100) / 100;
+
+                    if (amount >= 0.01) {
+                        transactions.push({ from: debtor.name, to: creditor.name, amount: amount });
+                    }
+
+                    debtor.amount = Math.round((debtor.amount - amount) * 100) / 100;
+                    creditor.amount = Math.round((creditor.amount - amount) * 100) / 100;
+
+                    if (debtor.amount < THRESHOLD) debtors.shift();
+                    if (creditor.amount < THRESHOLD) creditors.shift();
+                }
+
+                this.currentGame.transactions = transactions;
+
+                if (transactions.length === 0) {
+                    instructions.innerHTML = '<div class="empty-state"><div class="empty-state-title">All settled!</div><p>No payments needed.</p></div>';
+                } else {
+                    instructions.innerHTML = transactions.map(t => {
+                        return '<div class="settlement-card">' +
+                            '<div class="settlement-arrow">' +
+                            '<div class="settlement-payer">' +
+                            '<div class="settlement-name">' + t.from + '</div>' +
+                            '<div class="settlement-amount red">-' + this.formatCurrency(t.amount) + '</div>' +
+                            '</div>' +
+                            '<div class="arrow-icon">→</div>' +
+                            '<div class="settlement-receiver">' +
+                            '<div class="settlement-name">' + t.to + '</div>' +
+                            '<div class="settlement-amount green">+' + this.formatCurrency(t.amount) + '</div>' +
+                            '</div></div>' +
+                            '<div style="text-align: center; margin-top: 8px; font-size: 12px; color: #6B7280;">' +
+                            'Pay via Revolut, cash, or bank transfer' +
+                            '</div></div>';
+                    }).join('');
+                }
+
+                const imbalance = this.currentGame.chipImbalance;
+                if (imbalance && imbalance.missingChips > 0) {
+                    const imbalanceDiv = document.createElement('div');
+                    imbalanceDiv.innerHTML = '<div class="section-title" style="margin-top: 20px;">Chip Balance</div>' +
+                        '<div class="warning-box">' +
+                        '<div class="title">🎲 Chip Imbalance Detected</div>' +
+                        '<div>Expected: ' + this.formatNumber(imbalance.expectedChips) + ' chips</div>' +
+                        '<div>Actual: ' + this.formatNumber(imbalance.actualChips) + ' chips</div>' +
+                        '<div style="color: #EF4444; margin-top: 4px;">' +
+                        'Missing: ' + this.formatNumber(imbalance.missingChips) + ' chips = ' + this.formatCurrency(imbalance.missingAmount) +
+                        '</div>' +
+                        '<div style="margin-top: 8px; font-size: 12px;">' +
+                        'Loss of ' + this.formatCurrency(imbalance.missingAmount / this.currentGame.players.length) + ' per player distributed' +
+                        '</div></div>';
+                    container.appendChild(imbalanceDiv);
+                }
+
+                // Expense summary if any
+                if (this.currentGame.expenses.length > 0) {
+                    const totalExpenses = this.currentGame.expenses.reduce((s, e) => s + e.amount, 0);
+                    const expDiv = document.createElement('div');
+                    expDiv.innerHTML = '<div class="section-title" style="margin-top: 20px;">Expenses Included</div>' +
+                        '<div class="info-box">' +
+                        '<div class="title">💰 ' + this.formatCurrency(totalExpenses) + ' in expenses factored into results</div>' +
+                        '<div style="font-size: 12px; margin-top: 4px;">Each player\'s result above already accounts for what they owe or are owed for shared expenses.</div>' +
+                        '</div>';
+                    container.appendChild(expDiv);
+                }
+            },
+
+            confirmSettlement() {
+                this.currentGame.settled = true;
+                this.currentGame.settledAt = new Date().toISOString();
+                this.saveData();
+                this.showToast('Game settled successfully!');
+                this.goToScreen('dashboard');
+            },
+
+            // Custom confirm dialog — works in webviews where native confirm() is blocked
+            showConfirm(title, message, onConfirm) {
+                document.getElementById('cf-title').textContent = title;
+                document.getElementById('cf-message').textContent = message;
+                const okBtn = document.getElementById('cf-ok');
+                // Replace the button to clear any previous handler
+                const newBtn = okBtn.cloneNode(true);
+                okBtn.parentNode.replaceChild(newBtn, okBtn);
+                newBtn.addEventListener('click', () => {
+                    this.hideConfirm();
+                    onConfirm();
+                });
+                document.getElementById('modal-confirm').classList.remove('hidden');
+            },
+
+            hideConfirm() {
+                document.getElementById('modal-confirm').classList.add('hidden');
+            },
+
+            reopenGame() {
+                if (!this.currentGame) return;
+                const id = this.currentGame.id;
+                this.showConfirm('Edit Game', 'Re-open this game to edit chips and expenses? You will re-confirm the cash-out and settlement afterwards.', () => {
+                    const game = this.games.find(g => g.id === id);
+                    if (!game) return;
+                    this.currentGame = game;
+                    this.currentGame.settled = false;
+                    this.currentGame.settledAt = null;
+                    this.saveData();
+                    this.goToScreen('gameManagement');
+                    this.showToast('Game re-opened — edit then settle again');
+                });
+            },
+
+            deleteGame() {
+                if (!this.currentGame) return;
+                const id = this.currentGame.id;
+                this.showConfirm('Delete Game', 'Delete this game permanently? This removes it from all standings and cannot be undone.', () => {
+                    this.games = this.games.filter(g => g.id !== id);
+                    this.currentGame = null;
+                    this.saveData();
+                    this.showToast('Game deleted');
+                    this.goToScreen('dashboard');
+                });
+            },
+
+            viewGameSummary(gameId) {
+                const game = this.games.find(g => g.id === gameId);
+                if (!game) return;
+
+                this.currentGame = game;
+                document.getElementById('gs-title').textContent = game.name;
+                document.getElementById('gs-subtitle').textContent = game.date;
+                document.getElementById('gs-buyin-info').textContent = this.formatCurrency(game.buyinAmount);
+                document.getElementById('gs-chip-info').textContent = this.formatNumber(game.chipsPerBuyin) + ' per buy-in';
+
+                const totalPot = game.players.reduce((sum, p) => sum + p.totalInvested, 0);
+                const totalExpenses = game.expenses.reduce((sum, e) => sum + e.amount, 0);
+
+                document.getElementById('gs-pot').textContent = this.formatCurrency(totalPot);
+                document.getElementById('gs-expenses').textContent = this.formatCurrency(totalExpenses);
+
+                const chipsContainer = document.getElementById('gs-chips');
+                if (game.results) {
+                    const chipRows = game.results.slice().sort((a, b) => (b.cashoutChips || 0) - (a.cashoutChips || 0));
+                    chipsContainer.innerHTML = chipRows.map((r, i) => {
+                        const rank = i + 1;
+                        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : (rank + '.');
+                        return '<div class="result-row profit">' +
+                            '<div style="display:flex;align-items:center;gap:12px;">' +
+                            '<div style="font-size:18px;font-weight:800;min-width:32px;text-align:center;">' + medal + '</div>' +
+                            '<div class="result-name">' + this.esc(r.name) + '</div>' +
+                            '</div>' +
+                            '<div class="result-amount" style="color:#F59E0B;">' + this.formatNumber(r.cashoutChips || 0) + ' chips</div>' +
+                            '</div>';
+                    }).join('');
+                } else {
+                    chipsContainer.innerHTML = '<div class="empty-state">No chip data</div>';
+                }
+
+                const resultsContainer = document.getElementById('gs-results');
+                if (game.results) {
+                    resultsContainer.innerHTML = game.results.map(r => {
+                        return '<div class="result-row ' + (r.adjustedProfit >= 0 ? 'profit' : 'loss') + '">' +
+                            '<div>' +
+                            '<div class="result-name">' + this.esc(r.name) + '</div>' +
+                            '<div style="font-size: 12px; color: #6B7280;">' +
+                            'In: ' + this.formatCurrency(r.invested) + ' • Out: ' + this.formatNumber(r.cashoutChips) + ' chips' +
+                            '</div></div>' +
+                            '<div class="result-amount ' + (r.adjustedProfit >= 0 ? 'green' : 'red') + '">' +
+                            (r.adjustedProfit >= 0 ? '+' : '') + this.formatCurrency(r.adjustedProfit) +
+                            '</div></div>';
+                    }).join('');
+                } else {
+                    resultsContainer.innerHTML = '<div class="empty-state">No results available</div>';
+                }
+
+                const settlementsSection = document.getElementById('gs-settlements-section');
+                const settlementsContainer = document.getElementById('gs-settlements');
+                if (game.transactions && game.transactions.length > 0) {
+                    settlementsSection.style.display = 'block';
+                    settlementsContainer.innerHTML = game.transactions.map(t => {
+                        return '<div class="settlement-card">' +
+                            '<div class="settlement-arrow">' +
+                            '<div class="settlement-payer">' +
+                            '<div class="settlement-name">' + t.from + '</div>' +
+                            '<div class="settlement-amount red">-' + this.formatCurrency(t.amount) + '</div>' +
+                            '</div>' +
+                            '<div class="arrow-icon">→</div>' +
+                            '<div class="settlement-receiver">' +
+                            '<div class="settlement-name">' + t.to + '</div>' +
+                            '<div class="settlement-amount green">+' + this.formatCurrency(t.amount) + '</div>' +
+                            '</div></div></div>';
+                    }).join('');
+                } else {
+                    settlementsSection.style.display = 'none';
+                }
+
+                const expensesSection = document.getElementById('gs-expenses-section');
+                const expensesContainer = document.getElementById('gs-expenses-list');
+                if (game.expenses.length > 0) {
+                    expensesSection.style.display = 'block';
+                    expensesContainer.innerHTML = game.expenses.map(e => {
+                        return '<div class="expense-item">' +
+                            '<div class="expense-info">' +
+                            '<div class="expense-desc">' + this.esc(e.description) + '</div>' +
+                            '<div class="expense-meta">' +
+                            e.category + ' • Paid by ' + (e.paidBy || 'Host') +
+                            (e.consumers ? '<br>' + e.consumers.map(c => '<span class="consumer-tag">' + this.esc(c) + '</span>').join('') : '') +
+                            '</div></div>' +
+                            '<div class="expense-amount currency">' + this.formatCurrency(e.amount) + '</div>' +
+                            '</div>';
+                    }).join('');
+                } else {
+                    expensesSection.style.display = 'none';
+                }
+
+                this.goToScreen('gameSummary');
+            },
+
+            showLateJoinModal() {
+                if (!this.currentGame) return;
+                const inGameIds = new Set(this.currentGame.players.map(p => p.id));
+                const available = this.groupMembers().filter(p => !inGameIds.has(p.id));
+                const listEl = document.getElementById('lj-player-list');
+                const emptyEl = document.getElementById('lj-empty');
+                if (available.length === 0) {
+                    listEl.innerHTML = '';
+                    emptyEl.style.display = 'block';
+                } else {
+                    emptyEl.style.display = 'none';
+                    listEl.innerHTML = available.map(p =>
+                        '<div class="player-list-item" onclick="app.addLatePlayer(\'' + p.id + '\')">' +
+                        '<div class="player-avatar">' + this.esc(p.name.charAt(0).toUpperCase()) + '</div>' +
+                        '<div class="player-info"><div class="player-list-name">' + this.esc(p.name) + '</div>' +
+                        (p.nickname ? '<div class="player-list-nickname">' + this.esc(p.nickname) + '</div>' : '') +
+                        '</div><div style="color:#10B981;font-size:13px;font-weight:600;">Add →</div>' +
+                        '</div>'
+                    ).join('');
+                }
+                document.getElementById('modal-lateJoin').classList.remove('hidden');
+            },
+
+            hideLateJoinModal() {
+                document.getElementById('modal-lateJoin').classList.add('hidden');
+            },
+
+            addLatePlayer(playerId) {
+                const player = this.players.find(p => p.id === playerId);
+                if (!player) return;
+                this.currentGame.players.push({
+                    id: player.id,
+                    name: player.name,
+                    nickname: player.nickname,
+                    buyins: 0,
+                    rebuys: 0,
+                    addons: 0,
+                    totalInvested: 0,
+                    totalChips: 0,
+                    cashoutChips: 0,
+                    lateJoin: true
+                });
+                this.saveData();
+                this.hideLateJoinModal();
+                this.renderGameManagement();
+                this.showToast(player.name + ' joined the game!');
+            },
+
+            renderPlayersList() {
+                if (!this.currentGroup) { this.goToScreen('groups'); return; }
+
+                const nameEl = document.getElementById('players-group-name');
+                if (nameEl) nameEl.textContent = this.currentGroup.name;
+
+                const container = document.getElementById('players-list');
+                const emptyState = document.getElementById('players-empty');
+                const members = this.groupMembers();
+
+                if (members.length === 0) {
+                    container.innerHTML = '';
+                    emptyState.style.display = 'block';
+                    return;
+                }
+
+                emptyState.style.display = 'none';
+                container.innerHTML = members.map(p => {
+                    return '<div class="player-list-item" style="cursor: default;">' +
+                        '<div class="player-avatar">' + this.esc(p.name.charAt(0).toUpperCase()) + '</div>' +
+                        '<div class="player-info">' +
+                        '<div class="player-list-name">' + this.esc(p.name) + '</div>' +
+                        (p.nickname ? '<div class="player-list-nickname">' + this.esc(p.nickname) + '</div>' : '') +
+                        '</div>' +
+                        '<button class="btn btn-ghost btn-sm" onclick="app.removeFromGroup(' + "'" + p.id + "'" + ')" style="width: auto; padding: 8px 12px;">Remove</button>' +
+                        '</div>';
+                }).join('');
+            },
+
+            removeFromGroup(playerId) {
+                if (!this.currentGroup) return;
+                this.currentGroup.memberIds = (this.currentGroup.memberIds || []).filter(id => id !== playerId);
+                this.saveData();
+                this.renderPlayersList();
+                if (document.getElementById('screen-selectPlayers').classList.contains('active')) {
+                    this.renderSelectPlayers();
+                }
+                this.showToast('Removed from group');
+            },
+
+            // Modal: add existing players (from global pool) to this group
+            showAddMemberModal() {
+                if (!this.currentGroup) return;
+                const memberIds = new Set(this.currentGroup.memberIds || []);
+                const available = this.players.filter(p => !memberIds.has(p.id));
+                const listEl = document.getElementById('am-player-list');
+                const emptyEl = document.getElementById('am-empty');
+                if (available.length === 0) {
+                    listEl.innerHTML = '';
+                    emptyEl.style.display = 'block';
+                } else {
+                    emptyEl.style.display = 'none';
+                    listEl.innerHTML = available.map(p =>
+                        '<div class="player-list-item" onclick="app.addExistingToGroup(\'' + p.id + '\')">' +
+                        '<div class="player-avatar">' + this.esc(p.name.charAt(0).toUpperCase()) + '</div>' +
+                        '<div class="player-info"><div class="player-list-name">' + this.esc(p.name) + '</div>' +
+                        (p.nickname ? '<div class="player-list-nickname">' + this.esc(p.nickname) + '</div>' : '') +
+                        '</div><div style="color:#10B981;font-size:13px;font-weight:600;">Add →</div>' +
+                        '</div>'
+                    ).join('');
+                }
+                document.getElementById('modal-addMember').classList.remove('hidden');
+            },
+
+            hideAddMemberModal() {
+                document.getElementById('modal-addMember').classList.add('hidden');
+            },
+
+            addExistingToGroup(playerId) {
+                if (!this.currentGroup) return;
+                if (!this.currentGroup.memberIds) this.currentGroup.memberIds = [];
+                if (!this.currentGroup.memberIds.includes(playerId)) {
+                    this.currentGroup.memberIds.push(playerId);
+                }
+                this.saveData();
+                this.hideAddMemberModal();
+                this.renderPlayersList();
+                this.showToast('Added to group');
+            },
+
+            showAddPlayerModal() {
+                document.getElementById('modal-addPlayer').classList.remove('hidden');
+                document.getElementById('ap-name').focus();
+            },
+
+            hideAddPlayerModal() {
+                document.getElementById('modal-addPlayer').classList.add('hidden');
+                document.getElementById('ap-name').value = '';
+                document.getElementById('ap-nickname').value = '';
+            },
+
+            handleAddPlayer() {
+                const name = document.getElementById('ap-name').value.trim();
+                const nickname = document.getElementById('ap-nickname').value.trim();
+
+                if (!name) {
+                    this.showToast('Enter a player name', 'error');
+                    return;
+                }
+                // Prevent duplicate names — names are used as identifiers in expense settlement
+                const exists = this.players.some(p => p.name.toLowerCase() === name.toLowerCase());
+                if (exists) {
+                    this.showToast('A player named "' + name + '" already exists', 'error');
+                    return;
+                }
+
+                const newPlayer = {
+                    id: this.generateId(),
+                    name: name,
+                    nickname: nickname || null,
+                    createdAt: new Date().toISOString()
+                };
+                this.players.push(newPlayer);
+
+                // New players are added to the current group automatically
+                if (this.currentGroup) {
+                    if (!this.currentGroup.memberIds) this.currentGroup.memberIds = [];
+                    this.currentGroup.memberIds.push(newPlayer.id);
+                }
+
+                this.saveData();
+                this.hideAddPlayerModal();
+                this.renderPlayersList();
+                // Refresh select-players screen if active so the new player appears
+                if (document.getElementById('screen-selectPlayers').classList.contains('active')) {
+                    this.renderSelectPlayers();
+                }
+                this.showToast('Player added!');
+            },
+
+            deletePlayer(playerId) {
+                // Block deletion if the player is in an active (unsettled) game — that would
+                // leave a dangling reference mid-game. Settled games are snapshots and stay intact.
+                const inActiveGame = this.games.some(g =>
+                    !g.settled && (g.players || []).some(p => p.id === playerId)
+                );
+                if (inActiveGame) {
+                    this.showToast('Can\'t delete — this player is in an active game. Settle or delete that game first.', 'error');
+                    return;
+                }
+                this.showConfirm('Delete Player', 'Delete this player? They stay in past settled games for history, but are removed from all groups.', () => {
+                    this.players = this.players.filter(p => p.id !== playerId);
+                    this.groups.forEach(grp => {
+                        grp.memberIds = (grp.memberIds || []).filter(id => id !== playerId);
+                    });
+                    this.saveData();
+                    this.renderPlayersList();
+                    this.showToast('Player deleted');
+                });
+            }
+        };
+
+        window.app = app;
+        try {
+            app.init();
+        } catch (err) {
+            console.error('Init failed:', err);
+        }
+
+        // Register service worker for offline support (PWA)
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('sw.js').catch(function(err) {
+                    console.log('Service worker registration skipped:', err);
+                });
+            });
+        }
+    </script>
+</body>
+                </html>
