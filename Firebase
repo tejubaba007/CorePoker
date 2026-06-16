@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>CorePokerGroup</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#064E3B">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="CorePoker">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="icon" type="image/png" href="icon-192.png">
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Firebase (cloud sync + Google login) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, query, where, getDocs, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAFGVmWtp7TL1ivJbfID6D4Y7OovXTiw2k",
+            authDomain: "corepoker-83a05.firebaseapp.com",
+            projectId: "corepoker-83a05",
+            storageBucket: "corepoker-83a05.firebasestorage.app",
+            messagingSenderId: "534050018162",
+            appId: "1:534050018162:web:70d8c985f10f02b18e43eb"
+        };
+
+        const fbApp = initializeApp(firebaseConfig);
+        const auth = getAuth(fbApp);
+        const db = getFirestore(fbApp);
+        try { await enableIndexedDbPersistence(db); } catch(e) { /* multi-tab or unsupported */ }
+
+        const provider = new GoogleAuthProvider();
+
+        // Expose a small, stable API for the main app to call
+        window.fb = {
+            ready: false,
+            user: null,
+            signIn() {
+                // Popup first; fall back to redirect for in-app webviews that block popups
+                return signInWithPopup(auth, provider).catch((err) => {
+                    if (err && (err.code === 'auth/popup-blocked' || err.code === 'auth/operation-not-supported-in-this-environment' || err.code === 'auth/cancelled-popup-request')) {
+                        return signInWithRedirect(auth, provider);
+                    }
+                    throw err;
+                });
+            },
+            signUpEmail(email, password) {
+                return createUserWithEmailAndPassword(auth, email, password);
+            },
+            signInEmail(email, password) {
+                return signInWithEmailAndPassword(auth, email, password);
+            },
+            resetPassword(email) {
+                return sendPasswordResetEmail(auth, email);
+            },
+            signOut() { return signOut(auth); },
+            // Save this user's whole dataset under their uid
+            async saveUserData(uid, data) {
+                await setDoc(doc(db, 'users', uid), { data: JSON.stringify(data), updatedAt: Date.now() });
+            },
+            async loadUserData(uid) {
+                const snap = await getDoc(doc(db, 'users', uid));
+                if (snap.exists()) {
+                    try { return JSON.parse(snap.data().data); } catch(e) { return null; }
+                }
+                return null;
+            },
+            // Publish a group (with its games) under a share code so others can pull it
+            async publishGroup(code, payload) {
+                await setDoc(doc(db, 'sharedGroups', code), { payload: JSON.stringify(payload), updatedAt: Date.now() });
+            },
+            async fetchGroupByCode(code) {
+                const snap = await getDoc(doc(db, 'sharedGroups', code));
+                if (snap.exists()) {
+                    try { return JSON.parse(snap.data().payload); } catch(e) { return null; }
+                }
+                return null;
+            }
+        };
+
+        // Handle redirect sign-in result (for webviews)
+        getRedirectResult(auth).catch(() => {});
+
+        onAuthStateChanged(auth, (user) => {
+            window.fb.ready = true;
+            window.fb.user = user ? { uid: user.uid, name: user.displayName || (user.email ? user.email.split('@')[0] : 'Player'), email: user.email, photo: user.photoURL } : null;
+            if (window.app && window.app.onAuthChanged) {
+                window.app.onAuthChanged(window.fb.user);
+            }
+        });
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0B0F19; color: #E2E8F0; min-height: 100vh; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+        #root { max-width: 480px; margin: 0 auto; min-height: 100vh; position: relative; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        .app-header { background: linear-gradient(135deg, #064E3B 0%, #065F46 50%, #047857 100%); padding: 20px 16px 24px; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .app-header h1 { font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #fff 0%, #D1FAE5 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.5px; }
+        .app-header .subtitle { font-size: 12px; color: #A7F3D0; margin-top: 2px; opacity: 0.9; }
+        .nav-bar { display: flex; justify-content: space-around; background: #111827; padding: 8px 0; position: fixed; bottom: 0; left: 0; right: 0; max-width: 480px; margin: 0 auto; border-top: 1px solid #1F2937; z-index: 100; }
+        .nav-item { display: flex; flex-direction: column; align-items: center; padding: 6px 16px; cursor: pointer; color: #6B7280; font-size: 10px; font-weight: 500; transition: all 0.2s; border: none; background: none; }
+        .nav-item.active { color: #10B981; }
+        .btn { border: none; border-radius: 14px; font-family: inherit; font-weight: 600; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; padding: 14px 24px; width: 100%; }
+        .btn:active { transform: scale(0.97); }
+        .btn-primary { background: linear-gradient(135deg, #059669 0%, #10B981 100%); color: white; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3); }
+        .btn-secondary { background: #1F2937; color: #E2E8F0; border: 1px solid #374151; }
+        .btn-danger { background: linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color: white; }
+        .btn-ghost { background: transparent; color: #9CA3AF; border: 1px solid #374151; }
+        .btn-sm { padding: 10px 16px; font-size: 13px; border-radius: 10px; }
+        .btn-lg { padding: 18px 24px; font-size: 17px; border-radius: 16px; }
+        .card { background: #111827; border: 1px solid #1F2937; border-radius: 16px; padding: 16px; margin-bottom: 12px; transition: all 0.2s; }
+        .card-active { border-color: #059669; background: linear-gradient(135deg, rgba(6,78,59,0.08) 0%, #111827 100%); }
+        .form-group { margin-bottom: 16px; }
+        .form-label { display: block; font-size: 12px; font-weight: 600; color: #9CA3AF; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .form-input { width: 100%; padding: 14px 16px; background: #1F2937; border: 1px solid #374151; border-radius: 12px; color: #F3F4F6; font-size: 16px; font-family: inherit; transition: all 0.2s; }
+        .form-input:focus { outline: none; border-color: #10B981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1); }
+        .form-input::placeholder { color: #6B7280; }
+        select.form-input { appearance: none; cursor: pointer; }
+        .player-game-card { background: linear-gradient(135deg, #111827 0%, #0F172A 100%); border: 1px solid #1F2937; border-radius: 16px; padding: 16px; margin-bottom: 12px; position: relative; overflow: hidden; }
+        .player-game-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: linear-gradient(180deg, #10B981, #059669); border-radius: 16px 0 0 16px; }
+        .player-name { font-size: 18px; font-weight: 700; color: #F3F4F6; }
+        .player-stats-row { display: flex; gap: 16px; margin-top: 8px; font-size: 13px; color: #9CA3AF; }
+        .player-stat { display: flex; align-items: center; gap: 4px; }
+        .player-stat-value { font-weight: 700; color: #E2E8F0; }
+        .player-total-in { font-size: 20px; font-weight: 800; color: #10B981; margin-top: 8px; }
+        .action-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 12px; }
+        .action-btn { padding: 12px 8px; border-radius: 12px; border: none; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.15s; font-family: inherit; }
+        .action-btn:active { transform: scale(0.95); }
+        .btn-buyin { background: linear-gradient(135deg, #059669, #10B981); color: white; }
+        .btn-rebuy { background: linear-gradient(135deg, #D97706, #F59E0B); color: white; }
+        .btn-addon { background: linear-gradient(135deg, #7C3AED, #8B5CF6); color: white; }
+        .game-header-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        .game-stat-card { background: linear-gradient(135deg, #111827, #0F172A); border: 1px solid #1F2937; border-radius: 14px; padding: 16px; text-align: center; }
+        .game-stat-label { font-size: 11px; color: #6B7280; font-weight: 600; text-transform: uppercase; }
+        .game-stat-value { font-size: 24px; font-weight: 800; margin-top: 4px; }
+        .game-stat-value.green { color: #10B981; }
+        .game-stat-value.amber { color: #F59E0B; }
+        .expense-item { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: #1F2937; border-radius: 12px; margin-bottom: 8px; }
+        .expense-info { flex: 1; }
+        .expense-desc { font-weight: 600; color: #E2E8F0; font-size: 14px; }
+        .expense-meta { font-size: 12px; color: #6B7280; margin-top: 2px; }
+        .expense-amount { font-size: 16px; font-weight: 700; color: #F59E0B; }
+        .settlement-card { background: linear-gradient(135deg, #111827, #0F172A); border: 1px solid #1F2937; border-radius: 16px; padding: 20px; margin-bottom: 12px; }
+        .settlement-arrow { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
+        .settlement-payer { text-align: right; flex: 1; }
+        .settlement-receiver { text-align: left; flex: 1; }
+        .settlement-name { font-size: 16px; font-weight: 700; color: #E2E8F0; }
+        .settlement-amount { font-size: 22px; font-weight: 800; }
+        .settlement-amount.red { color: #EF4444; }
+        .settlement-amount.green { color: #10B981; }
+        .arrow-icon { color: #6B7280; font-size: 20px; }
+        .cashout-row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: #1F2937; border-radius: 12px; margin-bottom: 10px; }
+        .cashout-name { flex: 1; font-weight: 600; font-size: 15px; }
+        .cashout-invested { font-size: 13px; color: #9CA3AF; }
+        .cashout-input { width: 100px; padding: 10px 12px; background: #111827; border: 1px solid #374151; border-radius: 10px; color: #F3F4F6; font-size: 16px; font-weight: 700; text-align: center; font-family: inherit; }
+        .cashout-input:focus { outline: none; border-color: #10B981; }
+        .result-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-radius: 12px; margin-bottom: 8px; }
+        .result-row.profit { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .result-row.loss { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); }
+        .result-name { font-weight: 700; font-size: 15px; }
+        .result-amount { font-size: 20px; font-weight: 800; }
+        .result-amount.green { color: #10B981; }
+        .result-amount.red { color: #EF4444; }
+        .screen { padding: 16px; padding-bottom: 90px; min-height: 100vh; display: none; }
+        .screen.active { display: block; }
+        .screen-title { font-size: 24px; font-weight: 800; margin-bottom: 4px; }
+        .screen-subtitle { font-size: 14px; color: #6B7280; margin-bottom: 20px; }
+        .empty-state { text-align: center; padding: 60px 20px; color: #6B7280; }
+        .empty-state-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+        .empty-state-title { font-size: 18px; font-weight: 700; color: #9CA3AF; margin-bottom: 8px; }
+        .chip-counter { display: inline-flex; align-items: center; gap: 6px; background: #064E3B; color: #D1FAE5; padding: 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 700; }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); display: flex; align-items: flex-end; justify-content: center; z-index: 200; animation: fadeIn 0.2s; }
+        .modal-overlay.hidden { display: none; }
+        .modal-content { background: #111827; width: 100%; max-width: 480px; border-radius: 24px 24px 0 0; padding: 24px; animation: slideUp 0.3s; max-height: 85vh; overflow-y: auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .modal-title { font-size: 20px; font-weight: 800; }
+        .modal-close { background: #1F2937; border: none; color: #9CA3AF; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; }
+        .player-list-item { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: #1F2937; border-radius: 12px; margin-bottom: 8px; cursor: pointer; transition: all 0.15s; border: 2px solid transparent; }
+        .player-list-item:hover { background: #374151; }
+        .player-list-item.selected { border-color: #10B981; background: rgba(16,185,129,0.1); }
+        .player-avatar { width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, #059669, #10B981); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 800; color: white; flex-shrink: 0; }
+        .player-info { flex: 1; }
+        .player-list-name { font-weight: 700; font-size: 15px; color: #F3F4F6; }
+        .player-list-nickname { font-size: 12px; color: #6B7280; }
+        .checkbox { width: 24px; height: 24px; border-radius: 8px; border: 2px solid #374151; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
+        .checkbox.checked { background: #10B981; border-color: #10B981; }
+        .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #1F2937; color: #E2E8F0; padding: 12px 20px; border-radius: 12px; font-weight: 600; font-size: 14px; z-index: 300; box-shadow: 0 10px 40px rgba(0,0,0,0.4); border: 1px solid #374151; animation: fadeIn 0.3s; }
+        .toast.hidden { display: none; }
+        .toast.success { border-color: #10B981; }
+        .toast.error { border-color: #EF4444; }
+        .game-list-item { background: #111827; border: 1px solid #1F2937; border-radius: 16px; padding: 16px; margin-bottom: 12px; cursor: pointer; transition: all 0.2s; }
+        .game-list-item:hover { border-color: #374151; }
+        .game-list-name { font-size: 16px; font-weight: 700; color: #F3F4F6; }
+        .game-list-meta { display: flex; gap: 12px; margin-top: 6px; font-size: 13px; color: #6B7280; flex-wrap: wrap; }
+        .game-list-status { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+        .status-active { background: rgba(16,185,129,0.15); color: #10B981; }
+        .status-settled { background: rgba(107,114,128,0.15); color: #9CA3AF; }
+        .bottom-actions { position: fixed; bottom: 70px; left: 0; right: 0; max-width: 480px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 10px; background: linear-gradient(to top, #0B0F19 60%, transparent); z-index: 50; }
+        .section-title { font-size: 13px; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 0.5px; margin: 24px 0 12px; }
+        .currency { font-variant-numeric: tabular-nums; }
+        .chips { font-variant-numeric: tabular-nums; color: #F59E0B; }
+        .chip-info { display: inline-block; background: rgba(245, 158, 11, 0.1); color: #F59E0B; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+        .warning-box { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; color: #FCA5A5; font-size: 14px; }
+        .warning-box .title { font-weight: 700; color: #EF4444; margin-bottom: 4px; }
+        .info-box { background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; color: #93C5FD; font-size: 14px; }
+        .info-box .title { font-weight: 700; color: #60A5FA; margin-bottom: 4px; }
+        .consumer-tag { display: inline-block; background: rgba(16, 185, 129, 0.15); color: #10B981; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; margin-right: 4px; margin-top: 4px; }
+        .consumer-select { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .consumer-chip { padding: 8px 14px; border-radius: 20px; background: #1F2937; border: 1px solid #374151; color: #9CA3AF; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .consumer-chip.selected { background: rgba(16, 185, 129, 0.2); border-color: #10B981; color: #10B981; }
+        .consumer-chip.all-selected { background: rgba(59, 130, 246, 0.2); border-color: #3B82F6; color: #3B82F6; }
+        .lb-toggle { flex: 1; padding: 12px; border-radius: 12px; border: 1px solid #374151; background: #1F2937; color: #9CA3AF; font-family: inherit; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.2s; }
+        .lb-toggle.active { background: linear-gradient(135deg, #059669, #10B981); color: white; border-color: #10B981; }
+        .lb-period-row { display: flex; gap: 6px; margin-bottom: 16px; }
+        .lb-period { flex: 1; padding: 8px 4px; border-radius: 10px; border: 1px solid #374151; background: #1F2937; color: #9CA3AF; font-family: inherit; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+        .lb-period.active { background: #F59E0B; color: #111827; border-color: #F59E0B; }
+        @media (min-width: 481px) { #root { border-left: 1px solid #1F2937; border-right: 1px solid #1F2937; } }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <!-- LOGIN -->
+        <div id="screen-login" class="screen active" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:28px;">
+            <div style="font-size:56px;margin-bottom:4px;">🃏</div>
+            <h1 style="font-size:30px;font-weight:800;margin-bottom:6px;">CorePoker</h1>
+            <p id="login-subtitle" style="color:#9CA3AF;margin-bottom:28px;text-align:center;max-width:300px;">Log in to track your games and standings.</p>
+
+            <div style="width:100%;max-width:320px;">
+                <div class="form-group">
+                    <label class="form-label">Email</label>
+                    <input class="form-input" id="login-email" type="email" placeholder="you@email.com" autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input class="form-input" id="login-password" type="password" placeholder="At least 6 characters" autocomplete="current-password">
+                </div>
+
+                <button class="btn btn-primary btn-lg" id="login-primary-btn" onclick="app.doEmailAuth()" style="margin-top:4px;">Log In</button>
+
+                <div style="text-align:center;margin:12px 0;color:#6B7280;font-size:13px;">
+                    <span id="login-toggle-text">New here? </span>
+                    <a onclick="app.toggleAuthMode()" style="color:#10B981;font-weight:600;cursor:pointer;text-decoration:underline;" id="login-toggle-link">Create an account</a>
+                </div>
+
+                <div style="text-align:center;margin-bottom:12px;">
+                    <a onclick="app.doPasswordReset()" style="color:#6B7280;font-size:12px;cursor:pointer;">Forgot password?</a>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:10px;margin:18px 0;color:#4B5563;font-size:12px;">
+                    <div style="flex:1;height:1px;background:#374151;"></div>OR<div style="flex:1;height:1px;background:#374151;"></div>
+                </div>
+
+                <button class="btn btn-secondary" id="login-google-btn" onclick="app.doSignIn()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>
+                    Continue with Google
+                </button>
+
+                <p id="login-status" style="color:#EF4444;font-size:13px;margin-top:16px;text-align:center;min-height:18px;"></p>
+            </div>
+        </div>
+
+        <!-- GROUPS (landing) -->
+        <div id="screen-groups" class="screen">
+            <div class="app-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <h1>CorePoker</h1>
+                    <div class="subtitle" id="groups-user">Your poker groups</div>
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="app.doSignOut()" style="width:auto;padding:8px 12px;">Sign out</button>
+            </div>
+            <div style="padding: 16px;">
+                <button class="btn btn-primary btn-lg" onclick="app.showAddGroupModal()" style="margin-bottom: 10px;">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                    New Group
+                </button>
+                <button class="btn btn-secondary" onclick="app.showJoinGroupModal()" style="margin-bottom: 24px;">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                    Join Group with Code
+                </button>
+                <div class="section-title">Groups</div>
+                <div id="groups-list"></div>
+                <div id="groups-empty" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">♠️</div>
+                    <div class="empty-state-title">No groups yet</div>
+                    <p>Create a group, or join one with a share code.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- DASHBOARD -->
+        <div id="screen-dashboard" class="screen">
+            <div class="app-header">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('groups')" style="width:auto;padding:6px 10px;">←</button>
+                    <div>
+                        <h1 id="dash-group-name" style="font-size:20px;">Group</h1>
+                        <div class="subtitle">Games & standings</div>
+                    </div>
+                </div>
+            </div>
+            <div style="padding: 16px;">
+                <button class="btn btn-primary btn-lg" onclick="app.goToScreen('createGame')" style="margin-bottom: 16px;">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                    Create New Game
+                </button>
+                <button class="btn btn-secondary" onclick="app.goToScreen('leaderboard')" style="margin-bottom: 24px;">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 11V3m0 8l4 4m-4-4l-4 4M8 21V13m0 8l4-4m-4 4l-4-4"/></svg>
+                    View Leaderboard
+                </button>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 24px;">
+                    <div class="game-stat-card"><div class="game-stat-label">Games</div><div class="game-stat-value green" id="dash-total-games">0</div></div>
+                    <div class="game-stat-card"><div class="game-stat-label">Players</div><div class="game-stat-value" id="dash-total-players">0</div></div>
+                    <div class="game-stat-card"><div class="game-stat-label">Active</div><div class="game-stat-value amber" id="dash-active-players">0</div></div>
+                </div>
+                <div class="section-title">Active Games</div>
+                <div id="dash-active-games"></div>
+                <div class="section-title">Previous Games</div>
+                <div id="dash-settled-games"></div>
+                <div id="dash-empty" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">🃏</div>
+                    <div class="empty-state-title">No games yet</div>
+                    <p>Create your first game to get started!</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- LEADERBOARD -->
+        <div id="screen-leaderboard" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('dashboard')" style="width: auto;">← Back</button>
+                </div>
+                <div class="screen-title">Leaderboard</div>
+                <div class="screen-subtitle"><span id="lb-group-name">Group</span></div>
+                <div style="display:flex;gap:8px;margin-bottom:10px;">
+                    <button id="lb-toggle-standings" class="lb-toggle active" onclick="app.setLeaderboardMode('standings')">Standings</button>
+                    <button id="lb-toggle-expenses" class="lb-toggle" onclick="app.setLeaderboardMode('expenses')">Expenses</button>
+                </div>
+                <div class="lb-period-row">
+                    <button id="lb-period-day" class="lb-period" onclick="app.setLeaderboardPeriod('day')">Day</button>
+                    <button id="lb-period-week" class="lb-period" onclick="app.setLeaderboardPeriod('week')">Week</button>
+                    <button id="lb-period-month" class="lb-period" onclick="app.setLeaderboardPeriod('month')">Month</button>
+                    <button id="lb-period-year" class="lb-period" onclick="app.setLeaderboardPeriod('year')">Year</button>
+                    <button id="lb-period-all" class="lb-period active" onclick="app.setLeaderboardPeriod('all')">All</button>
+                </div>
+                <div id="lb-date-nav" style="display:none;align-items:center;justify-content:space-between;background:#1F2937;border-radius:12px;padding:6px 8px;margin-bottom:16px;">
+                    <button class="btn btn-ghost btn-sm" style="width:auto;padding:8px 14px;font-size:18px;" onclick="app.stepPeriod(-1)">◀</button>
+                    <div id="lb-date-label" style="font-weight:700;font-size:15px;color:#E2E8F0;text-align:center;flex:1;">—</div>
+                    <button class="btn btn-ghost btn-sm" id="lb-date-next" style="width:auto;padding:8px 14px;font-size:18px;" onclick="app.stepPeriod(1)">▶</button>
+                </div>
+                <div id="leaderboard-list"></div>
+                <div id="leaderboard-empty" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">🏆</div>
+                    <div class="empty-state-title">No standings yet</div>
+                    <p>Play and settle a game to build the leaderboard.</p>
+                </div>
+                <div style="margin-top:24px;">
+                    <div class="section-title">Per-game chip stacks</div>
+                    <div class="screen-subtitle" style="margin-bottom:12px;">Final chips each player held in a single game</div>
+                    <div id="lb-game-picker"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CREATE GAME -->
+        <div id="screen-createGame" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; gap: 12; margin-bottom: 20px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('dashboard')" style="width: auto;">← Back</button>
+                </div>
+                <div class="screen-title">Create New Game</div>
+                <div class="screen-subtitle">Set up your poker session</div>
+                <div id="create-game-form">
+                    <div class="form-group">
+                        <label class="form-label">Game Name</label>
+                        <input class="form-input" id="cg-name" placeholder="e.g. Friday Night Hold'em" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Date</label>
+                        <input type="date" class="form-input" id="cg-date" required>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label class="form-label">Buy-in (EUR)</label>
+                            <input type="number" class="form-input" id="cg-buyin" placeholder="5" min="1" step="any" value="5" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Chips per Buy-in</label>
+                            <input type="number" class="form-input" id="cg-chipcount" placeholder="1000" min="1" step="1" value="1000" required>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label class="form-label">Add-on (EUR) <span style="color:#6B7280;font-weight:400;text-transform:none;">optional</span></label>
+                            <input type="number" class="form-input" id="cg-addon-amount" placeholder="2.50" step="any">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Add-on Chips <span style="color:#6B7280;font-weight:400;text-transform:none;">optional</span></label>
+                            <input type="number" class="form-input" id="cg-addon-chips" placeholder="500" step="1">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Notes (optional)</label>
+                        <textarea class="form-input" id="cg-notes" placeholder="Any special rules or notes..." rows="3"></textarea>
+                    </div>
+                    <div style="background: #1F2937; border-radius: 12px; padding: 14px 16px; margin-bottom: 16px;">
+                        <div style="font-size: 12px; color: #6B7280; margin-bottom: 4px;">Chip Value</div>
+                        <div style="font-size: 18px; font-weight: 700; color: #F59E0B;" id="cg-preview">1 chip = EUR 0.005</div>
+                        <div style="font-size: 12px; color: #6B7280; margin-top: 4px;">Each buy-in gives <span id="cg-preview-chips" style="color:#F59E0B;font-weight:700;">1,000</span> chips worth <span id="cg-preview-eur" style="color:#10B981;font-weight:700;">EUR 5.00</span></div>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-lg" style="margin-top: 8px;" onclick="app.handleCreateGame()">Create Game →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- SELECT PLAYERS -->
+        <div id="screen-selectPlayers" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('dashboard')" style="width: auto;">← Back</button>
+                    <span id="sp-count" style="font-size: 14px; color: #6B7280; font-weight: 600;">0 selected</span>
+                </div>
+                <div class="screen-title">Select Players</div>
+                <div class="screen-subtitle">Choose who's playing tonight</div>
+                <button class="btn btn-secondary" onclick="app.showAddPlayerModal()" style="margin-bottom: 16px;">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                    Add New Player
+                </button>
+                <div id="sp-player-list"></div>
+                <div id="sp-empty" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">👥</div>
+                    <div class="empty-state-title">No players yet</div>
+                    <p>Add your first player above.</p>
+                </div>
+                <div id="sp-bottom-actions" class="bottom-actions" style="display: none;">
+                    <button class="btn btn-primary" id="sp-start-btn" onclick="app.startGameWithPlayers()">Start Game with 0 Players →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- GAME MANAGEMENT -->
+        <div id="screen-gameManagement" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('dashboard')" style="width: auto;">← Back</button>
+                </div>
+                <div class="screen-title" id="gm-title">Game</div>
+                <div class="screen-subtitle" id="gm-subtitle">Date</div>
+                <div style="background: #1F2937; border-radius: 12px; padding: 10px 14px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 12px; color: #9CA3AF;">Chip Rate: <span id="gm-chip-rate" style="color:#F59E0B;font-weight:700;">1 chip = EUR 0.005</span></span>
+                    <span style="font-size: 12px; color: #9CA3AF;">Per Buy-in: <span id="gm-per-buyin" style="color:#10B981;font-weight:700;">1,000 chips</span></span>
+                </div>
+                <div class="game-header-stats">
+                    <div class="game-stat-card"><div class="game-stat-label">Total Pot</div><div class="game-stat-value green currency" id="gm-pot">EUR 0.00</div></div>
+                    <div class="game-stat-card"><div class="game-stat-label">Expenses</div><div class="game-stat-value amber currency" id="gm-expenses">EUR 0.00</div></div>
+                </div>
+                <div class="section-title" id="gm-players-title">Players</div>
+                <div id="gm-player-cards"></div>
+                <div id="gm-expenses-section" style="display:none;">
+                    <div class="section-title">Expenses</div>
+                    <div id="gm-expenses-list"></div>
+                </div>
+                <div style="height: 160px;"></div>
+                <div class="bottom-actions">
+                    <button class="btn btn-secondary" onclick="app.showLateJoinModal()">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                        Player
+                    </button>
+                    <button class="btn btn-secondary" onclick="app.showExpenseModal()">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/></svg>
+                        Expense
+                    </button>
+                    <button class="btn btn-primary" onclick="app.goToScreen('cashout')">End →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- CASHOUT -->
+        <div id="screen-cashout" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('gameManagement')" style="width: auto;">← Back</button>
+                </div>
+                <div class="screen-title">Final Chip Counts</div>
+                <div class="screen-subtitle">Enter each player's remaining chips</div>
+                <div style="background: #1F2937; border-radius: 12px; padding: 10px 14px; margin-bottom: 16px; text-align: center;">
+                    <span style="font-size: 12px; color: #9CA3AF;">Chip Rate: <span id="co-chip-rate" style="color:#F59E0B;font-weight:700;">1 chip = EUR 0.005</span></span>
+                </div>
+                <div id="cashout-list"></div>
+                <div id="chip-imbalance-box" style="display:none;"></div>
+                <button class="btn btn-primary btn-lg" id="cashout-calc-btn" onclick="app.calculateCashout()" style="margin-top: 16px; opacity: 0.5;" disabled>Review Chip Balance →</button>
+                <p id="cashout-hint" style="text-align: center; color: #6B7280; font-size: 13px; margin-top: 12px;">Enter chip counts for all players to continue</p>
+            </div>
+        </div>
+
+        <!-- CHIP BALANCE (confirm poker before expenses) -->
+        <div id="screen-chipBalance" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('cashout')" style="width: auto;">← Back</button>
+                </div>
+                <div class="screen-title">Chip Balance</div>
+                <div class="screen-subtitle">Confirm the poker chips before settling cash</div>
+                <div id="cb-balance-box" style="margin-bottom: 16px;"></div>
+                <div class="section-title">Poker Result (chips only)</div>
+                <div id="cb-results"></div>
+                <button class="btn btn-primary btn-lg" onclick="app.proceedToSettlement()" style="margin-top: 16px;">Confirm Chips & Settle →</button>
+                <p style="text-align: center; color: #6B7280; font-size: 13px; margin-top: 12px;">Next step adds expenses and produces final payments.</p>
+            </div>
+        </div>
+
+        <!-- SETTLEMENT -->
+        <div id="screen-settlement" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('cashout')" style="width: auto;">← Back</button>
+                </div>
+                <div class="screen-title">Settlement</div>
+                <div class="screen-subtitle">Who pays whom</div>
+                <div class="section-title">Results</div>
+                <div id="settlement-results"></div>
+                <div class="section-title">Payment Instructions</div>
+                <div id="settlement-instructions"></div>
+                <button class="btn btn-primary btn-lg" onclick="app.confirmSettlement()" style="margin-top: 16px;">Confirm & Settle Game ✓</button>
+            </div>
+        </div>
+
+        <!-- GAME SUMMARY -->
+        <div id="screen-gameSummary" class="screen">
+            <div style="padding: 16px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('dashboard')" style="width: auto;">← Back</button>
+                </div>
+                <div class="screen-title" id="gs-title">Game Summary</div>
+                <div class="screen-subtitle" id="gs-subtitle">Date</div>
+                <div style="background: #1F2937; border-radius: 12px; padding: 10px 14px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 12px; color: #9CA3AF;">Buy-in: <span id="gs-buyin-info" style="color:#10B981;font-weight:700;">EUR 5.00</span></span>
+                    <span style="font-size: 12px; color: #9CA3AF;">Chips: <span id="gs-chip-info" style="color:#F59E0B;font-weight:700;">1,000 per buy-in</span></span>
+                </div>
+                <div class="game-header-stats">
+                    <div class="game-stat-card"><div class="game-stat-label">Total Pot</div><div class="game-stat-value green currency" id="gs-pot">EUR 0.00</div></div>
+                    <div class="game-stat-card"><div class="game-stat-label">Expenses</div><div class="game-stat-value amber currency" id="gs-expenses">EUR 0.00</div></div>
+                </div>
+                <div class="section-title">Chip Stacks</div>
+                <div class="screen-subtitle" style="margin-bottom:10px;">Final chips each player held</div>
+                <div id="gs-chips"></div>
+                <div class="section-title">Player Results</div>
+                <div id="gs-results"></div>
+                <div id="gs-settlements-section" style="display:none;">
+                    <div class="section-title">Settlements</div>
+                    <div id="gs-settlements"></div>
+                </div>
+                <div id="gs-expenses-section" style="display:none;">
+                    <div class="section-title">Expenses</div>
+                    <div id="gs-expenses-list"></div>
+                </div>
+                <div class="section-title" style="margin-top:24px;">Manage Game</div>
+                <button class="btn btn-secondary" onclick="app.reopenGame()" style="margin-bottom:10px;">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    Edit chips / expenses
+                </button>
+                <button class="btn btn-danger" onclick="app.deleteGame()">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    Delete this game
+                </button>
+            </div>
+        </div>
+
+        <!-- PLAYERS (group members) -->
+        <div id="screen-players" class="screen">
+            <div class="app-header">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <button class="btn btn-ghost btn-sm" onclick="app.goToScreen('dashboard')" style="width:auto;padding:6px 10px;">←</button>
+                    <div>
+                        <h1 style="font-size:20px;"><span id="players-group-name">Group</span></h1>
+                        <div class="subtitle">Group members</div>
+                    </div>
+                </div>
+            </div>
+            <div style="padding: 16px;">
+                <div style="display:flex;gap:10px;margin-bottom:16px;">
+                    <button class="btn btn-secondary" onclick="app.showAddMemberModal()">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M9 20H4v-2a3 3 0 015.356-1.857M9 20h6m-3-9a3 3 0 100-6 3 3 0 000 6z"/></svg>
+                        Add Existing
+                    </button>
+                    <button class="btn btn-primary" onclick="app.showAddPlayerModal()">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                        New Player
+                    </button>
+                </div>
+                <div id="players-list"></div>
+                <div id="players-empty" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">👥</div>
+                    <div class="empty-state-title">No members in this group</div>
+                    <p>Add existing players or create new ones.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ADD PLAYER MODAL -->
+        <div id="modal-addPlayer" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title">Add New Player</div>
+                    <button class="modal-close" onclick="app.hideAddPlayerModal()">✕</button>
+                </div>
+                <div>
+                    <div class="form-group">
+                        <label class="form-label">Name *</label>
+                        <input class="form-input" id="ap-name" placeholder="Player name">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Nickname</label>
+                        <input class="form-input" id="ap-nickname" placeholder="e.g. The Shark">
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="app.handleAddPlayer()">Add Player</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ADD EXPENSE MODAL -->
+        <div id="modal-addExpense" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title">Add Expense</div>
+                    <button class="modal-close" onclick="app.hideExpenseModal()">✕</button>
+                </div>
+                <div>
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <input class="form-input" id="ae-desc" placeholder="e.g. Pizza">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Amount (EUR)</label>
+                        <input type="number" class="form-input" id="ae-amount" placeholder="0.00" step="any">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Category</label>
+                        <select class="form-input" id="ae-category">
+                            <option>Food</option><option>Drinks</option><option>Snacks</option><option>Supplies</option><option>Other</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Paid By</label>
+                        <select class="form-input" id="ae-paidby"><option value="">Host</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Shared By (select who consumed this)</label>
+                        <div class="consumer-select" id="ae-consumers"></div>
+                        <div style="margin-top: 8px;">
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="app.selectAllConsumers()" style="width: auto; display: inline-flex;">Select All</button>
+                            <button type="button" class="btn btn-sm btn-ghost" onclick="app.clearAllConsumers()" style="width: auto; display: inline-flex; margin-left: 8px;">Clear All</button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-primary" style="margin-top: 8px;" onclick="app.handleAddExpense()">Add Expense</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- LATE JOIN MODAL -->
+        <div id="modal-lateJoin" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title">Add Player Mid-Game</div>
+                    <button class="modal-close" onclick="app.hideLateJoinModal()">✕</button>
+                </div>
+                <div id="lj-player-list" style="margin-bottom: 16px;"></div>
+                <div id="lj-empty" class="empty-state" style="display:none; padding: 20px;">
+                    <div class="empty-state-title">All registered players are already in this game</div>
+                    <p style="margin-top: 8px;">Go to Players tab to add new ones.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ADD GROUP MODAL -->
+        <div id="modal-addGroup" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title">New Group</div>
+                    <button class="modal-close" onclick="app.hideAddGroupModal()">✕</button>
+                </div>
+                <div>
+                    <div class="form-group">
+                        <label class="form-label">Group Name *</label>
+                        <input class="form-input" id="ag-name" placeholder="e.g. Friday Crew, Office Game">
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="app.handleAddGroup()">Create Group</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- JOIN GROUP MODAL -->
+        <div id="modal-joinGroup" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title">Join Group</div>
+                    <button class="modal-close" onclick="app.hideJoinGroupModal()">✕</button>
+                </div>
+                <div>
+                    <div class="form-group">
+                        <label class="form-label">Share Code</label>
+                        <input class="form-input" id="jg-code" placeholder="e.g. PIZZA42" style="text-transform:uppercase;">
+                    </div>
+                    <p style="color:#6B7280;font-size:12px;margin-bottom:16px;">Ask the group owner for their share code. You'll get a read-only copy of their games that updates when they re-share.</p>
+                    <button type="button" class="btn btn-primary" onclick="app.handleJoinGroup()">Join</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- SHARE GROUP MODAL -->
+        <div id="modal-shareGroup" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title">Share Group</div>
+                    <button class="modal-close" onclick="app.hideShareGroupModal()">✕</button>
+                </div>
+                <div>
+                    <p style="color:#9CA3AF;font-size:14px;margin-bottom:12px;">Give this code to your group so they can view these games:</p>
+                    <div id="sg-code" style="font-size:28px;font-weight:800;letter-spacing:2px;text-align:center;background:#1F2937;border-radius:12px;padding:16px;color:#F59E0B;margin-bottom:16px;">—</div>
+                    <button type="button" class="btn btn-primary" onclick="app.reshareGroup()" style="margin-bottom:8px;">Publish / Update Shared Copy</button>
+                    <p style="color:#6B7280;font-size:12px;text-align:center;">Tap to push the latest games to the shared code.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ADD MEMBER MODAL -->
+        <div id="modal-addMember" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title">Add Existing Player</div>
+                    <button class="modal-close" onclick="app.hideAddMemberModal()">✕</button>
+                </div>
+                <div id="am-player-list" style="margin-bottom: 16px;"></div>
+                <div id="am-empty" class="empty-state" style="display:none; padding: 20px;">
+                    <div class="empty-state-title">No other players available</div>
+                    <p style="margin-top: 8px;">Everyone you've created is already in this group. Use "New Player" to add someone new.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- GAME CHIPS MODAL -->
+        <div id="modal-gameChips" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div>
+                        <div class="modal-title" id="gc-title">Game</div>
+                        <div style="font-size:12px;color:#6B7280;" id="gc-subtitle">date</div>
+                    </div>
+                    <button class="modal-close" onclick="app.hideGameChips()">✕</button>
+                </div>
+                <div id="gc-list" style="margin-bottom: 8px;"></div>
+            </div>
+        </div>
+
+        <!-- CONFIRM MODAL (works in all browsers/webviews where confirm() is blocked) -->
+        <div id="modal-confirm" class="modal-overlay hidden">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <div class="modal-title" id="cf-title">Confirm</div>
+                    <button class="modal-close" onclick="app.hideConfirm()">✕</button>
+                </div>
+                <div id="cf-message" style="color:#D1D5DB;font-size:14px;line-height:1.5;margin-bottom:20px;">Are you sure?</div>
+                <div style="display:flex;gap:10px;">
+                    <button class="btn btn-secondary" onclick="app.hideConfirm()" style="flex:1;">Cancel</button>
+                    <button class="btn btn-primary" id="cf-ok" style="flex:1;">Confirm</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- TOAST -->
+        <div id="toast" class="toast hidden"></div>
+
+        <!-- NAV BAR -->
+        <nav class="nav-bar">
+            <button class="nav-item" id="nav-groups" onclick="app.goToScreen('groups')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                Groups
+            </button>
+            <button class="nav-item active" id="nav-dashboard" onclick="app.goToScreen('dashboard')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                Games
+            </button>
+            <button class="nav-item" id="nav-leaderboard" onclick="app.goToScreen('leaderboard')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 11V3m0 8l4 4m-4-4l-4 4M8 21V13m0 8l4-4m-4 4l-4-4"/></svg>
+                Ranks
+            </button>
+            <button class="nav-item" id="nav-players" onclick="app.goToScreen('players')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                Players
+            </button>
+        </nav>
+    </div>
+
+    <script>
+        var app = {
+            players: [],
+            games: [],
+            groups: [],
+            currentGroup: null,
+            leaderboardMode: 'standings', // 'standings' or 'expenses'
+            leaderboardPeriod: 'all', // 'day','week','month','year','all'
+            leaderboardAnchor: null, // anchor date for the selected period
+            currentGame: null,
+            selectedPlayers: [],
+            expenses: [],
+
+            init() {
+                document.getElementById('cg-date').value = new Date().toISOString().split('T')[0];
+                document.getElementById('cg-buyin').addEventListener('input', () => this.updateChipPreview());
+                document.getElementById('cg-chipcount').addEventListener('input', () => this.updateChipPreview());
+                this.updateChipPreview();
+                // Wait for Firebase auth state. If it doesn't load in 4s, show login anyway.
+                this.goToScreen('login');
+                document.getElementById('login-status').textContent = 'Loading…';
+                setTimeout(() => {
+                    if (!window.fb || !window.fb.ready) {
+                        document.getElementById('login-status').textContent = '';
+                    }
+                }, 4000);
+            },
+
+            // Called by Firebase when sign-in state changes
+            async onAuthChanged(user) {
+                if (user) {
+                    this.user = user;
+                    document.getElementById('login-status').textContent = '';
+                    const nameEl = document.getElementById('groups-user');
+                    if (nameEl) nameEl.textContent = user.name ? ('Signed in as ' + user.name) : 'Your poker groups';
+                    // Load this user's data (cloud first, fall back to local)
+                    await this.loadDataForUser(user.uid);
+                    this.renderGroups();
+                    this.goToScreen('groups');
+                } else {
+                    this.user = null;
+                    this.players = []; this.games = []; this.groups = []; this.expenses = [];
+                    this.goToScreen('login');
+                }
+            },
+
+            doSignIn() {
+                if (!window.fb) {
+                    this.showToast('Still loading — try again in a moment', 'error');
+                    return;
+                }
+                document.getElementById('login-status').textContent = 'Opening Google sign-in…';
+                window.fb.signIn().catch((err) => {
+                    document.getElementById('login-status').textContent = 'Google sign-in failed. Try email instead.';
+                    console.error('Sign-in error:', err);
+                });
+            },
+
+            // 'login' or 'signup'
+            authMode: 'login',
+            toggleAuthMode() {
+                this.authMode = this.authMode === 'login' ? 'signup' : 'login';
+                const isSignup = this.authMode === 'signup';
+                document.getElementById('login-primary-btn').textContent = isSignup ? 'Create Account' : 'Log In';
+                document.getElementById('login-subtitle').textContent = isSignup ? 'Create an account to start tracking.' : 'Log in to track your games and standings.';
+                document.getElementById('login-toggle-text').textContent = isSignup ? 'Already have an account? ' : 'New here? ';
+                document.getElementById('login-toggle-link').textContent = isSignup ? 'Log in' : 'Create an account';
+                document.getElementById('login-password').setAttribute('autocomplete', isSignup ? 'new-password' : 'current-password');
+                document.getElementById('login-status').textContent = '';
+            },
+
+            doEmailAuth() {
+                if (!window.fb) { this.showToast('Still loading — try again', 'error'); return; }
+                const email = document.getElementById('login-email').value.trim();
+                const password = document.getElementById('login-password').value;
+                const statusEl = document.getElementById('login-status');
+
+                if (!email || email.indexOf('@') === -1) { statusEl.textContent = 'Enter a valid email.'; return; }
+                if (!password || password.length < 6) { statusEl.textContent = 'Password must be at least 6 characters.'; return; }
+
+                statusEl.textContent = this.authMode === 'signup' ? 'Creating account…' : 'Logging in…';
+                const action = this.authMode === 'signup'
+                    ? window.fb.signUpEmail(email, password)
+                    : window.fb.signInEmail(email, password);
+
+                action.catch((err) => {
+                    statusEl.textContent = this._authErrorMessage(err);
+                    console.error('Email auth error:', err);
+                });
+            },
+
+            doPasswordReset() {
+                if (!window.fb) { this.showToast('Still loading', 'error'); return; }
+                const email = document.getElementById('login-email').value.trim();
+                const statusEl = document.getElementById('login-status');
+                if (!email || email.indexOf('@') === -1) { statusEl.textContent = 'Enter your email above first, then tap reset.'; return; }
+                window.fb.resetPassword(email)
+                    .then(() => { statusEl.style.color = '#10B981'; statusEl.textContent = 'Reset link sent — check your email.'; setTimeout(()=>{statusEl.style.color='#EF4444';}, 4000); })
+                    .catch((err) => { statusEl.textContent = this._authErrorMessage(err); });
+            },
+
+            _authErrorMessage(err) {
+                const code = err && err.code ? err.code : '';
+                if (code === 'auth/email-already-in-use') return 'That email is already registered — try logging in.';
+                if (code === 'auth/invalid-email') return 'That email address looks invalid.';
+                if (code === 'auth/weak-password') return 'Password too weak — use at least 6 characters.';
+                if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') return 'Wrong email or password.';
+                if (code === 'auth/user-not-found') return 'No account with that email — create one.';
+                if (code === 'auth/too-many-requests') return 'Too many attempts. Wait a moment and retry.';
+                if (code === 'auth/network-request-failed') return 'Network error — check your connection.';
+                return 'Something went wrong. Please try again.';
+            },
+
+            doSignOut() {
+                this.showConfirm('Sign Out', 'Sign out of CorePoker?', () => {
+                    if (window.fb) window.fb.signOut();
+                });
+            },
+
+            _userKey() {
+                return this.user ? ('corePokerData_' + this.user.uid) : 'corePokerData';
+            },
+
+            async loadDataForUser(uid) {
+                // Try cloud first
+                let data = null;
+                try {
+                    if (window.fb) data = await window.fb.loadUserData(uid);
+                } catch(e) { /* offline — fall back to local */ }
+
+                // Fall back to local copy for this user
+                if (!data) {
+                    const store = this._getStore();
+                    if (store) {
+                        try {
+                            const saved = store.getItem(this._userKey());
+                            if (saved) data = JSON.parse(saved);
+                        } catch(e) {}
+                    }
+                }
+
+                this.players = (data && Array.isArray(data.players)) ? data.players : [];
+                this.games = (data && Array.isArray(data.games)) ? data.games : [];
+                this.groups = (data && Array.isArray(data.groups)) ? data.groups : [];
+                this.expenses = this.games.flatMap(g => (Array.isArray(g.expenses) ? g.expenses : []));
+            },
+
+            loadData() {
+                // Legacy/local-only load (used before auth). Kept for safety.
+                const store = this._getStore();
+                if (!store) return;
+                let saved = null;
+                try { saved = store.getItem(this._userKey()); } catch(e) { return; }
+                if (!saved) return;
+                let data;
+                try { data = JSON.parse(saved); } catch(e) { this._loadError = true; return; }
+                this.players = Array.isArray(data.players) ? data.players : [];
+                this.games = Array.isArray(data.games) ? data.games : [];
+                this.groups = Array.isArray(data.groups) ? data.groups : [];
+                this.expenses = this.games.flatMap(g => (Array.isArray(g.expenses) ? g.expenses : []));
+            },
+
+            _getStore() {
+                try {
+                    const t = '__cpg_test__';
+                    localStorage.setItem(t, '1');
+                    localStorage.removeItem(t);
+                    return localStorage;
+                } catch(e) {}
+                try {
+                    const t = '__cpg_test__';
+                    sessionStorage.setItem(t, '1');
+                    sessionStorage.removeItem(t);
+                    return sessionStorage;
+                } catch(e) {}
+                return null;
+            },
+
+            saveData() {
+                const payload = {
+                    players: this.players,
+                    games: this.games,
+                    groups: this.groups
+                };
+                // Local copy (fast, offline) — keyed per user
+                try {
+                    const store = this._getStore();
+                    if (store) store.setItem(this._userKey(), JSON.stringify(payload));
+                } catch(e) {}
+                // Cloud copy (synced) — fire and forget
+                if (this.user && window.fb) {
+                    window.fb.saveUserData(this.user.uid, payload).catch(() => {});
+                }
+            },
+
+            generateId() {
+                return Date.now().toString(36) + Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+            },
+
+            formatCurrency(amount) {
+                return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(amount);
+            },
+
+            formatNumber(num) {
+                return new Intl.NumberFormat('en-IE').format(num);
+            },
+
+            // Escape user-entered text before inserting into innerHTML (prevents XSS)
+            esc(str) {
+                if (str === null || str === undefined) return '';
+                return String(str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            },
+
+            showToast(message, type) {
+                const toast = document.getElementById('toast');
+                toast.textContent = message;
+                toast.className = 'toast ' + (type || 'success');
+                toast.classList.remove('hidden');
+                setTimeout(() => toast.classList.add('hidden'), 3000);
+            },
+
+            goToScreen(screenName) {
+                // Must be signed in for everything except the login screen
+                if (screenName !== 'login' && !this.user) {
+                    screenName = 'login';
+                }
+                // Screens that require an open group. Without one, only 'groups' is reachable.
+                const groupScopedScreens = ['dashboard', 'players', 'leaderboard', 'createGame', 'selectPlayers', 'gameManagement', 'cashout', 'chipBalance', 'settlement', 'gameSummary'];
+                if (!this.currentGroup && groupScopedScreens.indexOf(screenName) !== -1) {
+                    this.showToast('Open or create a group first', 'error');
+                    screenName = 'groups';
+                }
+
+                document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+                document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+                // Hide the bottom nav on login, and until a group is open
+                const navBar = document.querySelector('.nav-bar');
+                if (navBar) navBar.style.display = (this.user && this.currentGroup) ? 'flex' : 'none';
+
+                const screen = document.getElementById('screen-' + screenName);
+                if (screen) {
+                    screen.classList.add('active');
+                    screen.classList.add('fade-in');
+                }
+
+                if (screenName === 'groups') {
+                    document.getElementById('nav-groups').classList.add('active');
+                    this.renderGroups();
+                } else if (screenName === 'dashboard') {
+                    document.getElementById('nav-dashboard').classList.add('active');
+                    this.renderDashboard();
+                } else if (screenName === 'players') {
+                    document.getElementById('nav-players').classList.add('active');
+                    this.renderPlayersList();
+                } else if (screenName === 'leaderboard') {
+                    document.getElementById('nav-leaderboard').classList.add('active');
+                    this.renderLeaderboard();
+                } else if (screenName === 'createGame') {
+                    document.getElementById('cg-name').value = '';
+                    document.getElementById('cg-addon-amount').value = '';
+                    document.getElementById('cg-addon-chips').value = '';
+                    document.getElementById('cg-notes').value = '';
+                    document.getElementById('cg-date').value = new Date().toISOString().split('T')[0];
+                    this.updateChipPreview();
+                } else if (screenName === 'selectPlayers') {
+                    this.renderSelectPlayers();
+                } else if (screenName === 'gameManagement') {
+                    this.renderGameManagement();
+                } else if (screenName === 'cashout') {
+                    this.renderCashout();
+                }
+            },
+
+            // =====================
+            // GROUPS
+            // =====================
+            renderGroups() {
+                const container = document.getElementById('groups-list');
+                const emptyState = document.getElementById('groups-empty');
+                if (!container) return;
+
+                if (this.groups.length === 0) {
+                    container.innerHTML = '';
+                    if (emptyState) emptyState.style.display = 'block';
+                    return;
+                }
+                if (emptyState) emptyState.style.display = 'none';
+
+                container.innerHTML = this.groups.map(grp => {
+                    const groupGames = this.games.filter(g => g.groupId === grp.id);
+                    const memberCount = (grp.memberIds || []).length;
+                    const badge = grp.joined ? ' <span style="font-size:11px;color:#3B82F6;">shared</span>' : '';
+                    const actionBtn = grp.joined
+                        ? '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();app.refreshSharedGroup(\'' + grp.shareCode + '\')" style="width:auto;padding:6px 10px;">↻ Refresh</button>'
+                        : '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();app.showShareGroupModal(\'' + grp.id + '\')" style="width:auto;padding:6px 10px;color:#F59E0B;">Share</button>';
+                    return '<div class="game-list-item" style="display:flex;align-items:center;justify-content:space-between;" onclick="app.openGroup(\'' + grp.id + '\')">' +
+                        '<div><div class="game-list-name">' + this.esc(grp.name) + badge + '</div>' +
+                        '<div class="game-list-meta">' +
+                        '<span>' + memberCount + ' players</span>' +
+                        '<span>' + groupGames.length + ' games</span>' +
+                        '</div></div>' +
+                        actionBtn +
+                        '</div>';
+                }).join('');
+            },
+
+            refreshSharedGroup(code) {
+                if (!window.fb) { this.showToast('Still loading', 'error'); return; }
+                window.fb.fetchGroupByCode(code).then((payload) => {
+                    if (!payload) { this.showToast('Shared group not found', 'error'); return; }
+                    this._importSharedGroup(code, payload);
+                }).catch(() => this.showToast('Refresh failed', 'error'));
+            },
+
+            showAddGroupModal() {
+                document.getElementById('modal-addGroup').classList.remove('hidden');
+                document.getElementById('ag-name').value = '';
+                document.getElementById('ag-name').focus();
+            },
+
+            hideAddGroupModal() {
+                document.getElementById('modal-addGroup').classList.add('hidden');
+            },
+
+            handleAddGroup() {
+                const name = document.getElementById('ag-name').value.trim();
+                if (!name) {
+                    this.showToast('Enter a group name', 'error');
+                    return;
+                }
+                const exists = this.groups.some(g => g.name.toLowerCase() === name.toLowerCase());
+                if (exists) {
+                    this.showToast('A group named "' + name + '" already exists', 'error');
+                    return;
+                }
+                const group = {
+                    id: this.generateId(),
+                    name: name,
+                    memberIds: [],
+                    shareCode: this._makeShareCode(),
+                    ownerUid: this.user ? this.user.uid : null,
+                    createdAt: new Date().toISOString()
+                };
+                this.groups.push(group);
+                this.saveData();
+                this.hideAddGroupModal();
+                this.renderGroups();
+                this.showToast('Group created!');
+            },
+
+            _makeShareCode() {
+                // Short, readable, avoids ambiguous chars
+                const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+                let code = '';
+                for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+                return code;
+            },
+
+            // Share: publish this group + its games to the cloud under its code
+            showShareGroupModal(groupId) {
+                const grp = this.groups.find(g => g.id === groupId);
+                if (!grp) return;
+                if (!grp.shareCode) { grp.shareCode = this._makeShareCode(); this.saveData(); }
+                this._sharingGroupId = groupId;
+                document.getElementById('sg-code').textContent = grp.shareCode;
+                document.getElementById('modal-shareGroup').classList.remove('hidden');
+            },
+            hideShareGroupModal() { document.getElementById('modal-shareGroup').classList.add('hidden'); },
+
+            reshareGroup() {
+                const grp = this.groups.find(g => g.id === this._sharingGroupId);
+                if (!grp || !window.fb) { this.showToast('Cannot share right now', 'error'); return; }
+                // Build a self-contained payload: group, its games, and the players in those games
+                const groupGames = this.games.filter(g => g.groupId === grp.id);
+                const memberIds = new Set(grp.memberIds || []);
+                const players = this.players.filter(p => memberIds.has(p.id));
+                const payload = {
+                    group: { name: grp.name, shareCode: grp.shareCode, ownerName: this.user ? this.user.name : null },
+                    games: groupGames,
+                    players: players
+                };
+                window.fb.publishGroup(grp.shareCode, payload)
+                    .then(() => this.showToast('Shared! Code: ' + grp.shareCode))
+                    .catch(() => this.showToast('Share failed — check connection', 'error'));
+            },
+
+            showJoinGroupModal() {
+                document.getElementById('jg-code').value = '';
+                document.getElementById('modal-joinGroup').classList.remove('hidden');
+                document.getElementById('jg-code').focus();
+            },
+            hideJoinGroupModal() { document.getElementById('modal-joinGroup').classList.add('hidden'); },
+
+            handleJoinGroup() {
+                const code = document.getElementById('jg-code').value.trim().toUpperCase();
+                if (!code) { this.showToast('Enter a share code', 'error'); return; }
+                if (!window.fb) { this.showToast('Still loading — try again', 'error'); return; }
+                window.fb.fetchGroupByCode(code).then((payload) => {
+                    if (!payload) { this.showToast('No group found for that code', 'error'); return; }
+                    this._importSharedGroup(code, payload);
+                }).catch(() => this.showToast('Lookup failed — check connection', 'error'));
+            },
+
+            _importSharedGroup(code, payload) {
+                // Avoid duplicate import
+                const existing = this.groups.find(g => g.shareCode === code && g.joined);
+                const groupId = existing ? existing.id : this.generateId();
+
+                // Merge players (by id) from the shared copy into the local pool
+                (payload.players || []).forEach(sp => {
+                    if (!this.players.some(p => p.id === sp.id)) {
+                        this.players.push(sp);
+                    }
+                });
+
+                // Remove any prior copy of this joined group + its games, then re-add fresh
+                this.games = this.games.filter(g => !(g.__sharedCode === code));
+                this.groups = this.groups.filter(g => !(g.shareCode === code && g.joined));
+
+                const memberIds = (payload.players || []).map(p => p.id);
+                this.groups.push({
+                    id: groupId,
+                    name: (payload.group && payload.group.name ? payload.group.name : 'Shared group') + ' (shared)',
+                    memberIds: memberIds,
+                    shareCode: code,
+                    joined: true,
+                    readOnly: true,
+                    ownerName: payload.group ? payload.group.ownerName : null,
+                    createdAt: new Date().toISOString()
+                });
+                (payload.games || []).forEach(g => {
+                    const copy = Object.assign({}, g, { groupId: groupId, __sharedCode: code });
+                    this.games.push(copy);
+                });
+
+                this.saveData();
+                this.hideJoinGroupModal();
+                this.renderGroups();
+                this.showToast('Joined "' + (payload.group ? payload.group.name : code) + '"!');
+            },
+
+            openGroup(groupId) {
+                this.currentGroup = this.groups.find(g => g.id === groupId);
+                if (!this.currentGroup) return;
+                this.goToScreen('dashboard');
+            },
+
+            deleteGroup(groupId) {
+                this.showConfirm('Delete Group', 'Delete this group and all its games? This cannot be undone.', () => {
+                    this.games = this.games.filter(g => g.groupId !== groupId);
+                    this.groups = this.groups.filter(g => g.id !== groupId);
+                    if (this.currentGroup && this.currentGroup.id === groupId) {
+                        this.currentGroup = null;
+                    }
+                    this.saveData();
+                    this.renderGroups();
+                    this.showToast('Group deleted');
+                });
+            },
+
+            // Players belonging to the current group, resolved from the global pool
+            groupMembers() {
+                if (!this.currentGroup) return [];
+                const ids = new Set(this.currentGroup.memberIds || []);
+                return this.players.filter(p => ids.has(p.id));
+            },
+
+            renderDashboard() {
+                if (!this.currentGroup) { this.goToScreen('groups'); return; }
+
+                // Header reflects the current group
+                const titleEl = document.getElementById('dash-group-name');
+                if (titleEl) titleEl.textContent = this.currentGroup.name;
+
+                const groupGames = this.games.filter(g => g.groupId === this.currentGroup.id);
+                const activeGames = groupGames.filter(g => !g.settled);
+                const settledGames = groupGames.filter(g => g.settled);
+
+                document.getElementById('dash-total-games').textContent = groupGames.length;
+                document.getElementById('dash-total-players').textContent = (this.currentGroup.memberIds || []).length;
+                document.getElementById('dash-active-players').textContent = activeGames.reduce((sum, g) => sum + (g.players ? g.players.length : 0), 0);
+
+                const activeContainer = document.getElementById('dash-active-games');
+                const settledContainer = document.getElementById('dash-settled-games');
+                const emptyState = document.getElementById('dash-empty');
+
+                if (groupGames.length === 0) {
+                    emptyState.style.display = 'block';
+                    activeContainer.innerHTML = '';
+                    settledContainer.innerHTML = '';
+                    return;
+                }
+
+                emptyState.style.display = 'none';
+
+                activeContainer.innerHTML = activeGames.map(g => {
+                    return '<div class="game-list-item" onclick="app.loadGame(' + "'" + g.id + "'" + ')">' +
+                        '<div class="game-list-name">' + this.esc(g.name) + '</div>' +
+                        '<div class="game-list-meta">' +
+                        '<span class="game-list-status status-active">Active</span>' +
+                        '<span>' + g.date + '</span>' +
+                        '<span>' + (g.players ? g.players.length : 0) + ' players</span>' +
+                        '<span class="currency">' + this.formatCurrency(g.totalPot || 0) + '</span>' +
+                        '</div></div>';
+                }).join('');
+
+                settledContainer.innerHTML = settledGames.map(g => {
+                    return '<div class="game-list-item" onclick="app.viewGameSummary(' + "'" + g.id + "'" + ')">' +
+                        '<div class="game-list-name">' + this.esc(g.name) + '</div>' +
+                        '<div class="game-list-meta">' +
+                        '<span class="game-list-status status-settled">Settled</span>' +
+                        '<span>' + g.date + '</span>' +
+                        '<span>' + (g.players ? g.players.length : 0) + ' players</span>' +
+                        '</div></div>';
+                }).join('');
+            },
+
+            setLeaderboardMode(mode) {
+                this.leaderboardMode = mode;
+                this.renderLeaderboard();
+            },
+
+            setLeaderboardPeriod(period) {
+                this.leaderboardPeriod = period;
+                // Anchor to the most recent game's date when switching to a dated period
+                this.leaderboardAnchor = this._mostRecentGameDate();
+                this.renderLeaderboard();
+            },
+
+            // Date of the most recent settled game in this group (or today)
+            _mostRecentGameDate() {
+                const games = this.games.filter(g => g.groupId === this.currentGroup.id && g.settled && g.results);
+                if (games.length === 0) return new Date();
+                let latest = null;
+                games.forEach(g => {
+                    const d = g.date ? new Date(g.date) : new Date();
+                    if (!isNaN(d.getTime()) && (latest === null || d > latest)) latest = d;
+                });
+                return latest || new Date();
+            },
+
+            // Move the anchor forward/back by one period unit
+            stepPeriod(direction) {
+                if (!this.leaderboardAnchor) this.leaderboardAnchor = this._mostRecentGameDate();
+                const d = new Date(this.leaderboardAnchor);
+                const p = this.leaderboardPeriod;
+                if (p === 'day') d.setDate(d.getDate() + direction);
+                else if (p === 'week') d.setDate(d.getDate() + 7 * direction);
+                else if (p === 'month') d.setMonth(d.getMonth() + direction);
+                else if (p === 'year') d.setFullYear(d.getFullYear() + direction);
+                this.leaderboardAnchor = d;
+                this.renderLeaderboard();
+            },
+
+            // Start/end boundaries of the period containing the anchor date
+            _periodBounds(anchor, period) {
+                const start = new Date(anchor); start.setHours(0,0,0,0);
+                const end = new Date(anchor); end.setHours(23,59,59,999);
+                if (period === 'day') {
+                    // start/end already the single day
+                } else if (period === 'week') {
+                    const dow = (start.getDay() + 6) % 7; // Monday = 0
+                    start.setDate(start.getDate() - dow);
+                    end.setTime(start.getTime());
+                    end.setDate(start.getDate() + 6);
+                    end.setHours(23,59,59,999);
+                } else if (period === 'month') {
+                    start.setDate(1);
+                    end.setMonth(start.getMonth() + 1, 0);
+                    end.setHours(23,59,59,999);
+                } else if (period === 'year') {
+                    start.setMonth(0, 1);
+                    end.setMonth(11, 31);
+                    end.setHours(23,59,59,999);
+                }
+                return { start: start, end: end };
+            },
+
+            // Human label for the current period
+            _periodLabel(anchor, period) {
+                const d = new Date(anchor);
+                if (period === 'day') {
+                    return d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+                } else if (period === 'week') {
+                    const b = this._periodBounds(anchor, 'week');
+                    const o = { day: 'numeric', month: 'short' };
+                    return b.start.toLocaleDateString('en-IE', o) + ' – ' + b.end.toLocaleDateString('en-IE', o) + ', ' + b.end.getFullYear();
+                } else if (period === 'month') {
+                    return d.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' });
+                } else if (period === 'year') {
+                    return String(d.getFullYear());
+                }
+                return 'All time';
+            },
+
+            // Does a game's date fall in the anchored period?
+            _gameInPeriod(game) {
+                if (this.leaderboardPeriod === 'all') return true;
+                let d = game.date ? new Date(game.date) : new Date();
+                if (isNaN(d.getTime())) d = new Date();
+                d.setHours(12,0,0,0);
+                const b = this._periodBounds(this.leaderboardAnchor, this.leaderboardPeriod);
+                return d >= b.start && d <= b.end;
+            },
+
+            renderLeaderboard() {
+                if (!this.currentGroup) { this.goToScreen('groups'); return; }
+                if (!this.leaderboardPeriod) this.leaderboardPeriod = 'all';
+                if (!this.leaderboardMode) this.leaderboardMode = 'standings';
+                if (!this.leaderboardAnchor) this.leaderboardAnchor = this._mostRecentGameDate();
+
+                const nameEl = document.getElementById('lb-group-name');
+                if (nameEl) nameEl.textContent = this.currentGroup.name;
+
+                // Mode toggle states
+                const standBtn = document.getElementById('lb-toggle-standings');
+                const expBtn = document.getElementById('lb-toggle-expenses');
+                if (standBtn && expBtn) {
+                    standBtn.classList.toggle('active', this.leaderboardMode === 'standings');
+                    expBtn.classList.toggle('active', this.leaderboardMode === 'expenses');
+                }
+
+                // Period type states
+                ['day', 'week', 'month', 'year', 'all'].forEach(p => {
+                    const el = document.getElementById('lb-period-' + p);
+                    if (el) el.classList.toggle('active', this.leaderboardPeriod === p);
+                });
+
+                // Date navigator — shown for dated periods, hidden for 'all'
+                const nav = document.getElementById('lb-date-nav');
+                const label = document.getElementById('lb-date-label');
+                if (this.leaderboardPeriod === 'all') {
+                    if (nav) nav.style.display = 'none';
+                } else {
+                    if (nav) nav.style.display = 'flex';
+                    if (label) label.textContent = this._periodLabel(this.leaderboardAnchor, this.leaderboardPeriod);
+                }
+
+                // Settled games in this group, within the anchored period
+                const settledGames = this.games.filter(g =>
+                    g.groupId === this.currentGroup.id &&
+                    g.settled && g.results &&
+                    this._gameInPeriod(g)
+                );
+
+                const container = document.getElementById('leaderboard-list');
+                const emptyState = document.getElementById('leaderboard-empty');
+
+                if (settledGames.length === 0) {
+                    container.innerHTML = '';
+                    if (emptyState) {
+                        emptyState.style.display = 'block';
+                        const titleEl = emptyState.querySelector('.empty-state-title');
+                        const pEl = emptyState.querySelector('p');
+                        if (titleEl) titleEl.textContent = this.leaderboardPeriod === 'all' ? 'No standings yet' : 'No games in this period';
+                        if (pEl) pEl.textContent = this.leaderboardPeriod === 'all' ? 'Play and settle a game to build the leaderboard.' : 'Use ◀ ▶ to find a period with games.';
+                    }
+                    this._renderGamePicker();
+                    return;
+                }
+                if (emptyState) emptyState.style.display = 'none';
+
+                // For 'all', show one combined ranking. For dated periods, list each game separately.
+                if (this.leaderboardPeriod === 'all') {
+                    if (this.leaderboardMode === 'expenses') {
+                        container.innerHTML = this._renderExpenseTotals(settledGames);
+                    } else {
+                        container.innerHTML = this._renderStandings(settledGames);
+                    }
+                } else {
+                    container.innerHTML = this._renderGamesSeparately(settledGames);
+                }
+
+                this._renderGamePicker();
+            },
+
+            // List each game in the period separately, with its own ranking
+            _renderGamesSeparately(games) {
+                const sorted = games.slice().sort((a, b) => (b.date > a.date ? 1 : -1));
+                const isExp = this.leaderboardMode === 'expenses';
+                return sorted.map(game => {
+                    const header = '<div class="section-title" style="margin-top:18px;">' + this.esc(game.name) + ' • ' + this.esc(game.date || '') + '</div>';
+                    return header + (isExp ? this._renderExpenseTotals([game]) : this._renderStandings([game]));
+                }).join('');
+            },
+
+            // Standings: each player's poker-only net (chips P&L), all-time within period
+            _renderStandings(games) {
+                const stats = {};
+                games.forEach(game => {
+                    game.results.forEach(r => {
+                        if (!stats[r.playerId]) {
+                            stats[r.playerId] = { name: r.name, poker: 0, games: 0 };
+                        }
+                        // Poker-only = pokerProfit (chips P&L), fall back to rawProfit/profit
+                        const pk = (r.pokerProfit !== undefined ? r.pokerProfit
+                                  : (r.rawProfit !== undefined ? r.rawProfit : r.profit)) || 0;
+                        stats[r.playerId].poker += pk;
+                        stats[r.playerId].games += 1;
+                    });
+                });
+                let rows = Object.values(stats);
+                rows.forEach(r => { r.poker = Math.round(r.poker * 100) / 100; });
+                rows.sort((a, b) => b.poker - a.poker);
+
+                return rows.map((r, i) => {
+                    const rank = i + 1;
+                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : (rank + '.');
+                    const secondary = r.games + (r.games === 1 ? ' game' : ' games');
+                    const pokerStr = (r.poker >= 0 ? '+' : '') + this.formatCurrency(r.poker);
+                    const pokerColor = r.poker >= 0 ? '#10B981' : '#EF4444';
+                    return '<div class="result-row ' + (r.poker < 0 ? 'loss' : 'profit') + '">' +
+                        '<div style="display:flex;align-items:center;gap:12px;flex:1;">' +
+                        '<div style="font-size:18px;font-weight:800;min-width:32px;text-align:center;">' + medal + '</div>' +
+                        '<div><div class="result-name">' + this.esc(r.name) + '</div>' +
+                        '<div style="font-size:12px;color:#6B7280;margin-top:2px;">' + secondary + '</div></div>' +
+                        '</div>' +
+                        '<div class="result-amount" style="color:' + pokerColor + ';">' + pokerStr + '</div>' +
+                        '</div>';
+                }).join('');
+            },
+
+            // Expense totals: how much each player actually spent (their share of consumption)
+            _renderExpenseTotals(games) {
+                const spend = {};
+                games.forEach(game => {
+                    (game.expenses || []).forEach(exp => {
+                        // Who consumed this expense? Split the cost across them.
+                        const consumers = exp.consumers && exp.consumers.length > 0
+                            ? exp.consumers
+                            : (game.players || []).map(p => p.name);
+                        if (consumers.length === 0) return;
+                        // Round shares to cents, remainder to first consumer, so totals reconcile
+                        const totalCents = Math.round(exp.amount * 100);
+                        const baseShareCents = Math.floor(totalCents / consumers.length);
+                        let remainderCents = totalCents - baseShareCents * consumers.length;
+                        consumers.forEach(name => {
+                            let shareCents = baseShareCents;
+                            if (remainderCents > 0) { shareCents += 1; remainderCents -= 1; }
+                            if (!spend[name]) spend[name] = { name: name, amount: 0, count: 0 };
+                            spend[name].amount += shareCents / 100;
+                            spend[name].count += 1;
+                        });
+                    });
+                });
+                let rows = Object.values(spend);
+                if (rows.length === 0) {
+                    return '<div class="empty-state" style="padding:24px;"><div class="empty-state-title">No expenses in this period</div><p>Expenses added during games will show here.</p></div>';
+                }
+                rows.forEach(r => { r.amount = Math.round(r.amount * 100) / 100; });
+                rows.sort((a, b) => b.amount - a.amount);
+                const grandTotal = Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+
+                const list = rows.map((r, i) => {
+                    const rank = i + 1;
+                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : (rank + '.');
+                    const secondary = 'shared in ' + r.count + (r.count === 1 ? ' expense' : ' expenses');
+                    return '<div class="result-row profit">' +
+                        '<div style="display:flex;align-items:center;gap:12px;">' +
+                        '<div style="font-size:18px;font-weight:800;min-width:32px;text-align:center;">' + medal + '</div>' +
+                        '<div><div class="result-name">' + this.esc(r.name) + '</div>' +
+                        '<div style="font-size:12px;color:#6B7280;margin-top:2px;">' + secondary + '</div></div>' +
+                        '</div>' +
+                        '<div class="result-amount" style="color:#F59E0B;">' + this.formatCurrency(r.amount) + '</div>' +
+                        '</div>';
+                }).join('');
+
+                return list +
+                    '<div class="result-row" style="border-top:1px solid #374151;margin-top:8px;">' +
+                    '<div class="result-name">Total spent</div>' +
+                    '<div class="result-amount" style="color:#F59E0B;">' + this.formatCurrency(grandTotal) + '</div>' +
+                    '</div>';
+            },
+
+            // List of settled games to drill into per-game chip stacks
+            _renderGamePicker() {
+                const picker = document.getElementById('lb-game-picker');
+                if (!picker) return;
+                const games = this.games
+                    .filter(g => g.groupId === this.currentGroup.id && g.sett
