@@ -1,5 +1,5 @@
 // CorePokerGroup Service Worker
-const CACHE_NAME = 'corepoker-v19';
+const CACHE_NAME = 'corepoker-v24';
 const ASSETS = [
   './index.html',
   './manifest.json',
