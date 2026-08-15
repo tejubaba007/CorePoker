@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.corepoker.twa",
+        "sha256_cert_fingerprints": ["30:B1:00:CE:70:0F:93:A4:C4:C5:25:C7:74:4A:01:FF:EB:27:25:15:A7:D7:30:A4:84:F8:B8:FD:9F:52:1D:96"]
+      }
+    }]
