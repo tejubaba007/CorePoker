@@ -1,6 +1,6 @@
 // CorePoker service worker.
 // Change VERSION on every release. That is the only line you need to touch.
-const VERSION = 'corepoker-v36';
+const VERSION = 'corepoker-v37';
 
 const CORE = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png'];
 
