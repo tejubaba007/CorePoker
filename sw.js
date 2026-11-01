@@ -1,74 +1,67 @@
-// CorePokerGroup Service Worker
-const CACHE_NAME = 'corepoker-v28';
-const ASSETS = [
-  './index.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png'
-];
+// CorePoker service worker.
+// Change VERSION on every release. That is the only line you need to touch.
+const VERSION = 'corepoker-v36';
 
-// Install: cache the app shell
-self.addEventListener('install', function(event) {
+const CORE = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png'];
+
+// Install: save the core files, then take over straight away instead of waiting
+self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(function(cache) {
-      return cache.addAll(ASSETS).catch(function() {
-        // If some assets fail to cache, still install
-        return Promise.resolve();
-      });
-    })
+    caches.open(VERSION)
+      .then((cache) => cache.addAll(CORE))
+      .catch(() => {})
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-// Activate: clean up old caches
-self.addEventListener('activate', function(event) {
+// Activate: delete copies saved by older versions, then control open pages
+self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then(function(keys) {
-      return Promise.all(
-        keys.filter(function(k) { return k !== CACHE_NAME; })
-            .map(function(k) { return caches.delete(k); })
-      );
-    })
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Fetch: network-first for the app/HTML (so the newest version loads when online),
-// cache-first for static assets (icons/manifest). Falls back to cache when offline.
-self.addEventListener('fetch', function(event) {
-  if (event.request.method !== 'GET') return;
-
+self.addEventListener('fetch', (event) => {
   const req = event.request;
-  const isHTML = req.mode === 'navigate' ||
-                 (req.headers.get('accept') || '').indexOf('text/html') !== -1;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  // Firebase, Google sign-in, fonts and CDNs always go straight to the network
+  if (url.origin !== self.location.origin) return;
 
-  if (isHTML) {
-    // Network-first: always try to get the freshest app, fall back to cache offline
+  const isPage = req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html');
+
+  if (isPage) {
+    // Pages: always try the network first so new releases show up at once.
+    // Fall back to the saved copy only when offline.
     event.respondWith(
-      fetch(req).then(function(response) {
-        if (response && response.status === 200) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then(function(cache) { cache.put(req, copy); });
-        }
-        return response;
-      }).catch(function() {
-        return caches.match(req).then(function(c) { return c || caches.match('./index.html'); });
-      })
+      fetch(req, { cache: 'no-store' })
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(VERSION).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then((hit) => hit || caches.match('/index.html')))
     );
     return;
   }
 
-  // Cache-first for everything else (icons, manifest)
+  // Icons, manifest and other files: serve the saved copy fast, refresh it in the background
   event.respondWith(
-    caches.match(req).then(function(cached) {
-      if (cached) return cached;
-      return fetch(req).then(function(response) {
-        if (response && response.status === 200 && req.url.startsWith(self.location.origin)) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then(function(cache) { cache.put(req, copy); });
-        }
-        return response;
-      }).catch(function() { return cached; });
+    caches.match(req).then((hit) => {
+      const fresh = fetch(req)
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(VERSION).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => hit);
+      return hit || fresh;
     })
   );
 });

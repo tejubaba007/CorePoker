@@ -3766,8 +3766,34 @@
 
         // Register service worker for offline support (PWA)
         if ('serviceWorker' in navigator) {
+            // When a new version goes live, the new service worker takes over and this page offers a reload.
+            // If the page is in the background at that moment it reloads quietly, so nobody is interrupted mid-game.
+            var cpHadController = !!navigator.serviceWorker.controller;
+            var cpUpdatePending = false;
+            function cpShowUpdateBar() {
+                if (document.getElementById('cp-update')) return;
+                var bar = document.createElement('div');
+                bar.id = 'cp-update';
+                bar.setAttribute('role', 'status');
+                bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:600;background:#1F4A38;color:#F4F1E8;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;justify-content:space-between;gap:12px;font:500 15px Inter,system-ui,sans-serif;';
+                bar.innerHTML = '<span>A new version of CorePoker is ready.</span><button style="font:600 15px Inter,system-ui,sans-serif;background:#F4F1E8;color:#14231C;border:0;border-radius:2px;padding:10px 16px;min-height:44px;cursor:pointer">Reload</button>';
+                bar.querySelector('button').onclick = function () { location.reload(); };
+                document.body.appendChild(bar);
+            }
+            navigator.serviceWorker.addEventListener('controllerchange', function () {
+                if (!cpHadController) { cpHadController = true; return; }
+                if (cpUpdatePending) return;
+                cpUpdatePending = true;
+                if (document.hidden) location.reload(); else cpShowUpdateBar();
+            });
+            document.addEventListener('visibilitychange', function () {
+                if (document.hidden && cpUpdatePending) location.reload();
+            });
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('sw.js').catch(function(err) {
+                navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+                    // Check for a new version on open and whenever the app comes back to the screen
+                    document.addEventListener('visibilitychange', function () { if (!document.hidden) reg.update().catch(function(){}); });
+                }).catch(function(err) {
                     console.log('Service worker registration skipped:', err);
                 });
             });
